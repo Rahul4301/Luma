@@ -18,10 +18,14 @@ struct CommandSurfaceView: View {
     @State private var selectedText: String? = nil
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
+    @State private var pendingAction: BrowserAction? = nil
+    @State private var showActionConfirmation: Bool = false
+    @State private var executionMessage: String? = nil
     
     let webViewWrapper: WebViewWrapper
     let commandRouter: CommandRouter
     let gemini: GeminiClient
+    let tabManager: TabManager
     let onActionProposed: (LLMResponse) -> Void
     
     var body: some View {
@@ -87,6 +91,13 @@ struct CommandSurfaceView: View {
                         .foregroundColor(.red)
                 }
                 
+                // Execution result message
+                if let message = executionMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+                
                 // Response text
                 if !responseText.isEmpty {
                     ScrollView {
@@ -118,6 +129,22 @@ struct CommandSurfaceView: View {
             .background(Color(NSColor.windowBackgroundColor))
             .cornerRadius(12)
             .shadow(radius: 10)
+            .alert("Confirm Action", isPresented: $showActionConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    pendingAction = nil
+                    executionMessage = nil
+                }
+                Button("Execute") {
+                    executePendingAction()
+                }
+            } message: {
+                if let action = pendingAction {
+                    let payloadText = action.payload?.map { "\($0.key): \($0.value)" }.joined(separator: "\n") ?? "none"
+                    Text("Action: \(action.type.rawValue)\n\nPayload:\n\(payloadText)")
+                } else {
+                    Text("No action to confirm")
+                }
+            }
             .onAppear {
                 // Focus input field when overlay appears
                 // Note: Focus management may require additional setup
@@ -185,8 +212,10 @@ struct CommandSurfaceView: View {
                     if let response = commandRouter.parseLLMResponse(data) {
                         responseText = response.text
                         
-                        // If action is present, propose it (do not execute here)
-                        if response.action != nil {
+                        // If action is present, show confirmation alert
+                        if let action = response.action {
+                            pendingAction = action
+                            showActionConfirmation = true
                             onActionProposed(response)
                         }
                     } else {
@@ -200,6 +229,25 @@ struct CommandSurfaceView: View {
         }
     }
     
+    private func executePendingAction() {
+        guard let action = pendingAction else { return }
+        
+        // Per SECURITY.md: No silent navigations - UI confirmation required.
+        // Per AGENTS.md: Actions are deterministic and executed exactly once.
+        let result = commandRouter.execute(action: action, tabManager: tabManager)
+        
+        switch result {
+        case .success(let message):
+            executionMessage = "Success: \(message)"
+            errorMessage = nil
+        case .failure(let error):
+            executionMessage = nil
+            errorMessage = "Error: \(error.localizedDescription)"
+        }
+        
+        pendingAction = nil
+    }
+    
     private func cancel() {
         isPresented = false
         inputText = ""
@@ -208,5 +256,7 @@ struct CommandSurfaceView: View {
         selectedText = nil
         errorMessage = nil
         isSending = false
+        pendingAction = nil
+        executionMessage = nil
     }
 }
