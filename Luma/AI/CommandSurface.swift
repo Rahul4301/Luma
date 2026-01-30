@@ -186,7 +186,7 @@ struct CommandSurfaceView: View {
                         responseText = response.text
                         
                         // If action is present, propose it (do not execute here)
-                        if let action = response.action {
+                        if response.action != nil {
                             onActionProposed(response)
                         }
                     } else {

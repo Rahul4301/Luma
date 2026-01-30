@@ -15,8 +15,12 @@ import Combine
 /// IMPORTANT: Do NOT delete Gemini BYO key on sign-out. Authentication and API key management are separate.
 final class SupabaseAuth: ObservableObject {
     
+    static let shared = SupabaseAuth()
+    
     @Published var isSignedIn: Bool = false
     @Published var userEmail: String? = nil
+    
+    private init() {}
     
     // TODO: Inject Supabase configuration (from .env or secure config):
     // - supabaseURL: Supabase project URL (e.g., https://xxx.supabase.co)
