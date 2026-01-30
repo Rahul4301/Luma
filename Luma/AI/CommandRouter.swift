@@ -21,44 +21,45 @@ final class CommandRouter {
     func execute(action: BrowserAction, tabManager: TabManager) -> Result<String, Error> {
         switch action.type {
         case .new_tab:
-            let url: URL?
-            if let urlString = action.payload?["url"] {
-                url = URL(string: urlString)
-            } else {
-                url = nil
+            // new_tab requires a URL; normalize scheme if missing.
+            guard let urlString = action.payload?["url"] else {
+                return .failure(CommandRouterError.missingPayloadField("url"))
+            }
+            let normalizedString = normalizeURLString(urlString)
+            guard let url = URL(string: normalizedString) else {
+                return .failure(CommandRouterError.invalidURL(urlString))
             }
             let tabId = tabManager.newTab(url: url)
-            return .success("Created new tab: \(tabId.uuidString)")
+            return .success("Created new tab: \(tabId.uuidString) -> \(normalizedString)")
             
         case .navigate:
             guard let urlString = action.payload?["url"] else {
                 return .failure(CommandRouterError.missingPayloadField("url"))
             }
-            guard let url = URL(string: urlString) else {
+            let normalizedString = normalizeURLString(urlString)
+            guard let url = URL(string: normalizedString) else {
                 return .failure(CommandRouterError.invalidURL(urlString))
             }
             tabManager.navigateCurrentTab(to: url)
-            return .success("Navigated to: \(urlString)")
+            return .success("Navigated to: \(normalizedString)")
             
         case .switch_tab:
-            guard let tabIdString = action.payload?["index"] else {
+            // For MVP, switch_tab by index is not supported due to lack of stable tab ordering.
+            guard let indexString = action.payload?["index"] else {
                 return .failure(CommandRouterError.missingPayloadField("index"))
             }
-            // Note: In MVP, we use UUID strings, not indices. For now, parse as UUID.
-            // Future: may need to map index to UUID if LLM provides index.
-            guard let tabId = UUID(uuidString: tabIdString) else {
-                return .failure(CommandRouterError.invalidTabID(tabIdString))
+            guard Int(indexString) != nil else {
+                return .failure(CommandRouterError.invalidIndex(indexString))
             }
-            tabManager.switchToTab(tabId)
-            return .success("Switched to tab: \(tabIdString)")
+            return .failure(CommandRouterError.unsupportedOperation("switch_tab by index is not supported in this MVP"))
             
         case .close_tab:
-            if let tabIdString = action.payload?["index"] {
-                guard let tabId = UUID(uuidString: tabIdString) else {
-                    return .failure(CommandRouterError.invalidTabID(tabIdString))
+            if let indexString = action.payload?["index"] {
+                // Optional index support is not implemented in MVP; fail closed.
+                guard Int(indexString) != nil else {
+                    return .failure(CommandRouterError.invalidIndex(indexString))
                 }
-                tabManager.closeTab(tabId)
-                return .success("Closed tab: \(tabIdString)")
+                return .failure(CommandRouterError.unsupportedOperation("close_tab by index is not supported in this MVP"))
             } else {
                 // Close current tab if no index specified
                 guard let currentId = tabManager.currentTab else {
@@ -76,7 +77,9 @@ enum CommandRouterError: LocalizedError {
     case missingPayloadField(String)
     case invalidURL(String)
     case invalidTabID(String)
+    case invalidIndex(String)
     case noCurrentTab
+    case unsupportedOperation(String)
     
     var errorDescription: String? {
         switch self {
@@ -86,8 +89,23 @@ enum CommandRouterError: LocalizedError {
             return "Invalid URL: \(url)"
         case .invalidTabID(let id):
             return "Invalid tab ID: \(id)"
+        case .invalidIndex(let index):
+            return "Invalid tab index: \(index)"
         case .noCurrentTab:
             return "No current tab to close"
+        case .unsupportedOperation(let description):
+            return "Unsupported operation: \(description)"
         }
+    }
+}
+
+/// Normalizes a URL string by prefixing https:// if no scheme is present.
+private func normalizeURLString(_ urlString: String) -> String {
+    let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return trimmed }
+    if trimmed.contains("://") {
+        return trimmed
+    } else {
+        return "https://" + trimmed
     }
 }

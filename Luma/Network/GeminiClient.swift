@@ -22,47 +22,134 @@ final class GeminiClient {
         self.apiKeyProvider = apiKeyProvider
     }
     
-    /// Generates a response from Gemini API.
+    /// Generates a response from Gemini API via HTTPS POST.
     /// 
-    /// MVP stub: Returns a deterministic canned LLMResponse after 100ms delay.
-    /// No network calls are made in this implementation.
-    /// 
-    /// Real implementation would:
-    /// 1. Check apiKeyProvider() returns non-nil key (fail closed if nil)
-    /// 2. Build URLRequest with Authorization header: "Bearer \(key)"
-    /// 3. POST prompt + optional context to Gemini API endpoint
-    /// 4. Parse JSON response into LLMResponse format
-    /// 5. Handle errors (network, API, parsing) per SECURITY.md fail-closed policy
-    /// 
-    /// Per AGENTS.md: Context is only sent when user explicitly requests (selected text/excerpt).
     /// - Parameters:
     ///   - prompt: User's prompt/query
     ///   - context: Optional context (selected text or excerpt) - only when user requests
     ///   - completion: Callback with Result containing LLMResponse JSON Data or Error
     func generate(prompt: String, context: String?, completion: @escaping (Result<Data, Error>) -> Void) {
-        // Enforce: fail closed if no API key
-        guard apiKeyProvider() != nil else {
+        // Fail closed if no API key
+        guard let apiKey = apiKeyProvider() else {
             DispatchQueue.main.async {
                 completion(.failure(NoAPIKeyError()))
             }
             return
         }
         
-        // MVP stub: Return canned response after 100ms delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            let cannedResponse = LLMResponse(
-                text: "This is a canned MVP response. Real implementation would call Gemini API.",
-                action: nil
-            )
-            
-            do {
-                let encoder = JSONEncoder()
-                let jsonData = try encoder.encode(cannedResponse)
-                completion(.success(jsonData))
-            } catch {
-                completion(.failure(error))
+        // Build the request URL
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=\(apiKey)") else {
+            DispatchQueue.main.async {
+                completion(.failure(GeminiAPIError.invalidURL))
             }
+            return
         }
+        
+        // Build request body
+        var contents: [[String: Any]] = []
+        
+        // Add context first if provided
+        if let context = context, !context.isEmpty {
+            contents.append([
+                "role": "user",
+                "parts": [["text": context]]
+            ])
+        }
+        
+        // Add user prompt
+        contents.append([
+            "role": "user",
+            "parts": [["text": prompt]]
+        ])
+        
+        let requestBody: [String: Any] = [
+            "contents": contents
+        ]
+        
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: requestBody) else {
+            DispatchQueue.main.async {
+                completion(.failure(GeminiAPIError.invalidRequest))
+            }
+            return
+        }
+        
+        // Create URLRequest
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = jsonData
+        
+        // Make the network call
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    completion(.failure(GeminiAPIError.invalidResponse))
+                    return
+                }
+                
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    let statusError = GeminiAPIError.httpError(statusCode: httpResponse.statusCode)
+                    completion(.failure(statusError))
+                    return
+                }
+                
+                guard let data = data else {
+                    completion(.failure(GeminiAPIError.noData))
+                    return
+                }
+                
+                // Parse Gemini's response format
+                do {
+                    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let candidates = json["candidates"] as? [[String: Any]],
+                          let firstCandidate = candidates.first,
+                          let content = firstCandidate["content"] as? [String: Any],
+                          let parts = content["parts"] as? [[String: Any]],
+                          let firstPart = parts.first,
+                          let text = firstPart["text"] as? String else {
+                        completion(.failure(GeminiAPIError.invalidResponseFormat))
+                        return
+                    }
+                    
+                    // Transform Gemini response into our LLMResponse format
+                    // For now, we'll try to parse action from the text if it contains JSON
+                    var browserAction: BrowserAction? = nil
+                    
+                    // Try to extract JSON action from text (simple heuristic)
+                    if let jsonRange = text.range(of: "```json", options: .caseInsensitive) ?? text.range(of: "{", options: []),
+                       let jsonEndRange = text.range(of: "}", options: [], range: jsonRange.upperBound..<text.endIndex) {
+                        let jsonString = String(text[jsonRange.lowerBound..<jsonEndRange.upperBound])
+                            .replacingOccurrences(of: "```json", with: "")
+                            .replacingOccurrences(of: "```", with: "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        
+                        if let jsonData = jsonString.data(using: .utf8),
+                           let parsed = try? JSONDecoder().decode(LLMResponse.self, from: jsonData) {
+                            browserAction = parsed.action
+                        }
+                    }
+                    
+                    // Create our LLMResponse
+                    let lumaResponse = LLMResponse(
+                        text: text,
+                        action: browserAction
+                    )
+                    
+                    // Encode back to Data
+                    let encoder = JSONEncoder()
+                    let responseData = try encoder.encode(lumaResponse)
+                    completion(.success(responseData))
+                    
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+        }.resume()
     }
 }
 
@@ -70,5 +157,32 @@ final class GeminiClient {
 struct NoAPIKeyError: LocalizedError {
     var errorDescription: String? {
         "No API key available. Please configure your Gemini API key in Settings."
+    }
+}
+
+/// Errors that can occur during Gemini API calls.
+enum GeminiAPIError: LocalizedError {
+    case invalidURL
+    case invalidRequest
+    case invalidResponse
+    case invalidResponseFormat
+    case noData
+    case httpError(statusCode: Int)
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Invalid Gemini API URL"
+        case .invalidRequest:
+            return "Failed to build request"
+        case .invalidResponse:
+            return "Invalid response from server"
+        case .invalidResponseFormat:
+            return "Response format not recognized"
+        case .noData:
+            return "No data received from server"
+        case .httpError(let code):
+            return "HTTP error: \(code)"
+        }
     }
 }

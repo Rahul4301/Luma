@@ -4,15 +4,19 @@ import SwiftUI
 import AppKit
 
 /// Settings view for API key management and authentication.
-/// 
+///
 /// Per SRS F5: Settings UI for AI enable/disable, Gemini API key input, and sign-in.
 /// Per SECURITY.md: Keys handled via KeychainManager only; UI never stores tokens directly.
 /// Per SECURITY.md: Keys must not be pre-populated in plain text fields.
 struct SettingsView: View {
     @ObservedObject private var auth = SupabaseAuth.shared
     
-    @State private var apiKeyInput: String = ""
-    @State private var keyStatusMessage: String? = nil
+    // Gemini BYO key state
+    @State private var keyInput: String = ""
+    @State private var statusText: String = ""
+    @State private var hasKey: Bool = false
+    
+    // Auth state
     @State private var authErrorMessage: String? = nil
     @State private var isProcessing: Bool = false
     
@@ -31,27 +35,32 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 
-                SecureField("Enter API key", text: $apiKeyInput)
+                SecureField("Enter API key", text: $keyInput)
                     .textFieldStyle(.roundedBorder)
                     .disabled(isProcessing)
                 
-                // Status message
-                if let message = keyStatusMessage {
-                    Text(message)
+                // Read-only key status row
+                Text("Status: " + (hasKey ? "Stored" : "Missing"))
+                    .font(.caption)
+                    .foregroundColor(hasKey ? .green : .secondary)
+                
+                // Detailed status text
+                if !statusText.isEmpty {
+                    Text(statusText)
                         .font(.caption)
-                        .foregroundColor(message.contains("success") ? .green : .red)
+                        .foregroundColor(.secondary)
                 }
                 
                 HStack(spacing: 12) {
                     Button("Save Key") {
                         saveKey()
                     }
-                    .disabled(apiKeyInput.isEmpty || isProcessing)
+                    .disabled(isProcessing)
                     
                     Button("Delete Key") {
                         deleteKey()
                     }
-                    .disabled(isProcessing)
+                    .disabled(isProcessing || !hasKey)
                 }
             }
             .padding()
@@ -60,7 +69,7 @@ struct SettingsView: View {
             
             Divider()
             
-            // Authentication Section
+            // Authentication Section (stubbed for Supabase)
             VStack(alignment: .leading, spacing: 12) {
                 Text("Authentication")
                     .font(.headline)
@@ -94,7 +103,6 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Auth error message
                 if let errorMessage = authErrorMessage {
                     Text(errorMessage)
                         .font(.caption)
@@ -109,20 +117,32 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 500, height: 400)
+        .onAppear(perform: loadKeyStatus)
+    }
+    
+    private func loadKeyStatus() {
+        let existingKey = KeychainManager.shared.fetchGeminiKey()
+        hasKey = (existingKey != nil)
+        statusText = hasKey ? "Key stored in Keychain" : "No Gemini key saved"
     }
     
     private func saveKey() {
-        guard !apiKeyInput.isEmpty else { return }
+        let trimmed = keyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            statusText = "Key cannot be empty"
+            return
+        }
         
         isProcessing = true
-        keyStatusMessage = nil
+        statusText = ""
         
         do {
-            try KeychainManager.shared.storeGeminiKey(apiKeyInput)
-            keyStatusMessage = "Key saved successfully"
-            apiKeyInput = "" // Clear input field for security
+            try KeychainManager.shared.storeGeminiKey(trimmed)
+            hasKey = true
+            keyInput = "" // Clear input field for security
+            statusText = "Key saved to Keychain"
         } catch {
-            keyStatusMessage = "Error: \(error.localizedDescription)"
+            statusText = "Error saving key: \(error.localizedDescription)"
         }
         
         isProcessing = false
@@ -130,13 +150,14 @@ struct SettingsView: View {
     
     private func deleteKey() {
         isProcessing = true
-        keyStatusMessage = nil
+        statusText = ""
         
         do {
             try KeychainManager.shared.deleteGeminiKey()
-            keyStatusMessage = "Key deleted successfully"
+            hasKey = false
+            statusText = "Key deleted"
         } catch {
-            keyStatusMessage = "Error: \(error.localizedDescription)"
+            statusText = "Error deleting key: \(error.localizedDescription)"
         }
         
         isProcessing = false
@@ -151,7 +172,7 @@ struct SettingsView: View {
         isProcessing = true
         authErrorMessage = nil
         
-        SupabaseAuth.shared.signInWithGoogle(presentingWindow: window) { [self] result in
+        SupabaseAuth.shared.signInWithGoogle(presentingWindow: window) { result in
             DispatchQueue.main.async {
                 isProcessing = false
                 

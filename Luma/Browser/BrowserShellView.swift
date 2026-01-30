@@ -13,7 +13,10 @@ struct BrowserShellView: View {
     @State private var addressBarText: String = "https://example.com"
     @State private var isCommandSurfacePresented: Bool = false
     @State private var eventMonitor: Any?
-    @State private var latestProposedResponse: LLMResponse?
+    @State private var pendingAction: BrowserAction? = nil
+    @State private var pendingAssistantText: String = ""
+    @State private var showActionConfirm: Bool = false
+    @State private var lastActionResultText: String = ""
     
     // Deterministic, reused dependencies for the command surface.
     private let router = CommandRouter()
@@ -58,11 +61,30 @@ struct BrowserShellView: View {
                         commandRouter: router,
                         gemini: gemini
                     ) { response in
-                        // Store latest proposed response for potential future confirmation UI.
-                        latestProposedResponse = response
+                        // Store latest proposed response for confirmation UI (no automatic execution).
+                        pendingAssistantText = response.text
+                        pendingAction = response.action
+                        showActionConfirm = (response.action != nil)
                     }
                 }
                 .padding(.top, 40)
+            }
+        }
+        .alert("Confirm Action", isPresented: $showActionConfirm) {
+            Button("Cancel", role: .cancel) {
+                pendingAction = nil
+            }
+            Button("Execute") {
+                executePendingAction()
+            }
+        } message: {
+            if let action = pendingAction {
+                let typeText = action.type.rawValue
+                let payloadKeys = action.payload?.keys.sorted() ?? []
+                let payloadSummary = payloadKeys.isEmpty ? "none" : payloadKeys.joined(separator: ", ")
+                Text("Assistant: \(pendingAssistantText)\n\nAction: \(typeText)\nPayload keys: \(payloadSummary)")
+            } else {
+                Text("No action to execute.")
             }
         }
         .onAppear {
@@ -130,6 +152,22 @@ struct BrowserShellView: View {
     /// Toggles the AI command surface overlay visibility.
     private func toggleCommandSurface() {
         isCommandSurfacePresented.toggle()
+    }
+    
+    /// Executes the pending action after explicit user confirmation.
+    private func executePendingAction() {
+        guard let action = pendingAction else { return }
+        
+        // Deterministic, single action execution per confirmation.
+        let result = router.execute(action: action, tabManager: tabManager)
+        switch result {
+        case .success(let message):
+            lastActionResultText = "Success: \(message)"
+        case .failure(let error):
+            lastActionResultText = "Error: \(error.localizedDescription)"
+        }
+        
+        pendingAction = nil
     }
 }
 
