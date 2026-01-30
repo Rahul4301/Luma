@@ -11,6 +11,10 @@ import SwiftUI
 /// This view never executes actions directly. It proposes actions via onActionProposed callback.
 struct CommandSurfaceView: View {
     @Binding var isPresented: Bool
+    let webViewWrapper: WebViewWrapper
+    let commandRouter: CommandRouter
+    let gemini: GeminiClient
+    let onActionProposed: (LLMResponse) -> Void
     
     @State private var inputText: String = ""
     @State private var responseText: String = ""
@@ -18,15 +22,7 @@ struct CommandSurfaceView: View {
     @State private var selectedText: String? = nil
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
-    @State private var pendingAction: BrowserAction? = nil
-    @State private var showActionConfirmation: Bool = false
-    @State private var executionMessage: String? = nil
-    
-    let webViewWrapper: WebViewWrapper
-    let commandRouter: CommandRouter
-    let gemini: GeminiClient
-    let tabManager: TabManager
-    let onActionProposed: (LLMResponse) -> Void
+    @State private var actionProposedMessage: String? = nil
     
     var body: some View {
         if isPresented {
@@ -91,8 +87,8 @@ struct CommandSurfaceView: View {
                         .foregroundColor(.red)
                 }
                 
-                // Execution result message
-                if let message = executionMessage {
+                // Action proposed message
+                if let message = actionProposedMessage {
                     Text(message)
                         .font(.caption)
                         .foregroundColor(.green)
@@ -129,22 +125,6 @@ struct CommandSurfaceView: View {
             .background(Color(NSColor.windowBackgroundColor))
             .cornerRadius(12)
             .shadow(radius: 10)
-            .alert("Confirm Action", isPresented: $showActionConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    pendingAction = nil
-                    executionMessage = nil
-                }
-                Button("Execute") {
-                    executePendingAction()
-                }
-            } message: {
-                if let action = pendingAction {
-                    let payloadText = action.payload?.map { "\($0.key): \($0.value)" }.joined(separator: "\n") ?? "none"
-                    Text("Action: \(action.type.rawValue)\n\nPayload:\n\(payloadText)")
-                } else {
-                    Text("No action to confirm")
-                }
-            }
             .onAppear {
                 // Focus input field when overlay appears
                 // Note: Focus management may require additional setup
@@ -202,21 +182,23 @@ struct CommandSurfaceView: View {
         let promptToSend = inputText
         let contextToSend = context
         
-        gemini.generate(prompt: promptToSend, context: contextToSend) { [self] result in
+        gemini.generate(prompt: promptToSend, context: contextToSend) { result in
             DispatchQueue.main.async {
                 isSending = false
                 
                 switch result {
                 case .success(let data):
                     // Decode LLMResponse
-                    if let response = commandRouter.parseLLMResponse(data) {
+                    let decoder = JSONDecoder()
+                    if let response = try? decoder.decode(LLMResponse.self, from: data) {
                         responseText = response.text
                         
-                        // If action is present, show confirmation alert
-                        if let action = response.action {
-                            pendingAction = action
-                            showActionConfirmation = true
+                        // If action is present, propose it (do not execute here)
+                        if response.action != nil {
                             onActionProposed(response)
+                            actionProposedMessage = "Action proposed"
+                        } else {
+                            actionProposedMessage = nil
                         }
                     } else {
                         errorMessage = "Failed to parse response"
@@ -229,25 +211,6 @@ struct CommandSurfaceView: View {
         }
     }
     
-    private func executePendingAction() {
-        guard let action = pendingAction else { return }
-        
-        // Per SECURITY.md: No silent navigations - UI confirmation required.
-        // Per AGENTS.md: Actions are deterministic and executed exactly once.
-        let result = commandRouter.execute(action: action, tabManager: tabManager)
-        
-        switch result {
-        case .success(let message):
-            executionMessage = "Success: \(message)"
-            errorMessage = nil
-        case .failure(let error):
-            executionMessage = nil
-            errorMessage = "Error: \(error.localizedDescription)"
-        }
-        
-        pendingAction = nil
-    }
-    
     private func cancel() {
         isPresented = false
         inputText = ""
@@ -256,7 +219,6 @@ struct CommandSurfaceView: View {
         selectedText = nil
         errorMessage = nil
         isSending = false
-        pendingAction = nil
-        executionMessage = nil
+        actionProposedMessage = nil
     }
 }
