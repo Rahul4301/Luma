@@ -2,23 +2,17 @@
 //  ContentView.swift
 //  Luma
 //
-//  Created by Rahul Suthar on 1/29/26.
+//  Root view that hosts the main browser shell.
 //
-
 import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        BrowserShellView()
     }
 }
 
 #Preview {
-    ContentView()
+    BrowserShellView()
 }
+
