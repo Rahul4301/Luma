@@ -70,5 +70,45 @@ final class DebugHarness {
                 print("DebugHarness: Correctly failed with no key: \(error.localizedDescription)")
             }
         }
+        
+        // Test KeychainManager
+        print("\nDebugHarness: Testing KeychainManager...")
+        let keychain = KeychainManager.shared
+        let testKey = "test-key-\(UUID().uuidString)" // Ephemeral test key, not a real secret
+        
+        // Store
+        do {
+            try keychain.storeGeminiKey(testKey)
+            print("DebugHarness: Stored test key successfully")
+        } catch {
+            print("DebugHarness: Failed to store key: \(error.localizedDescription)")
+            return
+        }
+        
+        // Fetch
+        if let fetchedKey = keychain.fetchGeminiKey() {
+            if fetchedKey == testKey {
+                print("DebugHarness: Fetched key matches stored key")
+            } else {
+                print("DebugHarness: ERROR - Fetched key does not match")
+            }
+        } else {
+            print("DebugHarness: ERROR - Failed to fetch key")
+        }
+        
+        // Delete
+        do {
+            try keychain.deleteGeminiKey()
+            print("DebugHarness: Deleted test key successfully")
+            
+            // Verify deletion
+            if keychain.fetchGeminiKey() == nil {
+                print("DebugHarness: Verified key was deleted")
+            } else {
+                print("DebugHarness: ERROR - Key still exists after deletion")
+            }
+        } catch {
+            print("DebugHarness: Failed to delete key: \(error.localizedDescription)")
+        }
     }
 }
