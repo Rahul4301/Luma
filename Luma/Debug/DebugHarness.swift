@@ -2,5 +2,47 @@
 import Foundation
 
 final class DebugHarness {
-    static func run() {}
+    /// Quick verification test for CommandRouter parsing and execution.
+    static func run() {
+        let router = CommandRouter()
+        let tabManager = TabManager()
+        
+        // Sample JSON response with action
+        let sampleJSON = """
+        {
+            "text": "ok",
+            "action": {
+                "id": "\(UUID().uuidString)",
+                "type": "navigate",
+                "payload": {
+                    "url": "https://example.com"
+                }
+            }
+        }
+        """
+        
+        guard let jsonData = sampleJSON.data(using: .utf8) else {
+            print("DebugHarness: Failed to create JSON data")
+            return
+        }
+        
+        guard let response = router.parseLLMResponse(jsonData) else {
+            print("DebugHarness: Failed to parse LLM response")
+            return
+        }
+        
+        print("DebugHarness: Parsed text: \(response.text)")
+        
+        if let action = response.action {
+            let result = router.execute(action: action, tabManager: tabManager)
+            switch result {
+            case .success(let message):
+                print("DebugHarness: Action executed successfully: \(message)")
+            case .failure(let error):
+                print("DebugHarness: Action execution failed: \(error.localizedDescription)")
+            }
+        } else {
+            print("DebugHarness: No action in response")
+        }
+    }
 }
