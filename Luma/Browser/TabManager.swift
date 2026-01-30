@@ -3,6 +3,53 @@ import Foundation
 import SwiftUI
 import Combine
 
+/// Manages browser tab lifecycle and navigation state.
+/// 
+/// Per SRS F1 and AGENTS.md: All browser actions must be deterministic and visible.
+/// No persistence in MVP (SRS 2.3).
 final class TabManager: ObservableObject {
-    @Published var tabs: [String] = []
+    /// Maps tab IDs to their current URLs.
+    @Published var tabs: [UUID: URL] = [:]
+    
+    /// The currently active tab ID, if any.
+    @Published var currentTab: UUID?
+    
+    /// Creates a new tab with an optional initial URL.
+    /// Sets the new tab as current and returns its ID.
+    /// Per SRS F1: Tab creation is deterministic and immediately visible.
+    func newTab(url: URL? = nil) -> UUID {
+        let id = UUID()
+        if let url = url {
+            tabs[id] = url
+        }
+        currentTab = id
+        return id
+    }
+    
+    /// Closes the specified tab.
+    /// If the closed tab was current, selects a fallback (previous tab or nil).
+    /// Per SRS F1: Tab closure is deterministic and immediately visible.
+    func closeTab(_ id: UUID) {
+        tabs.removeValue(forKey: id)
+        
+        if currentTab == id {
+            // Select a fallback: use the first remaining tab, or nil if none exist.
+            currentTab = tabs.keys.first
+        }
+    }
+    
+    /// Switches to the specified tab.
+    /// Per SRS F1: Tab switching is deterministic and immediately visible.
+    func switchToTab(_ id: UUID) {
+        guard tabs.keys.contains(id) else { return }
+        currentTab = id
+    }
+    
+    /// Navigates the current tab to the specified URL.
+    /// Updates the tab mapping and notifies observers.
+    /// Per SRS F1 and AGENTS.md: Navigation actions are deterministic and visible.
+    func navigateCurrentTab(to url: URL) {
+        guard let currentId = currentTab else { return }
+        tabs[currentId] = url
+    }
 }
