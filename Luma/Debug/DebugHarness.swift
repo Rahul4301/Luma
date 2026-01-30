@@ -44,5 +44,31 @@ final class DebugHarness {
         } else {
             print("DebugHarness: No action in response")
         }
+        
+        // Test GeminiClient stub
+        print("\nDebugHarness: Testing GeminiClient...")
+        let geminiClient = GeminiClient(apiKeyProvider: { "test-key" })
+        geminiClient.generate(prompt: "Test prompt", context: nil) { result in
+            switch result {
+            case .success(let data):
+                print("DebugHarness: GeminiClient returned data: \(data.count) bytes")
+                if let response = router.parseLLMResponse(data) {
+                    print("DebugHarness: Parsed LLMResponse text: \(response.text)")
+                }
+            case .failure(let error):
+                print("DebugHarness: GeminiClient error: \(error.localizedDescription)")
+            }
+        }
+        
+        // Test GeminiClient with nil key (should fail)
+        let geminiClientNoKey = GeminiClient(apiKeyProvider: { nil })
+        geminiClientNoKey.generate(prompt: "Test", context: nil) { result in
+            switch result {
+            case .success:
+                print("DebugHarness: ERROR - Should have failed with no key")
+            case .failure(let error):
+                print("DebugHarness: Correctly failed with no key: \(error.localizedDescription)")
+            }
+        }
     }
 }
