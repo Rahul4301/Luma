@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+Agents.md
+SRS.md
+Security.md
 # Xcode
 DerivedData/
 *.xcuserstate
