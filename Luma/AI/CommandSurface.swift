@@ -2,8 +2,211 @@
 import Foundation
 import SwiftUI
 
+/// Floating AI command surface overlay (Cmd+E).
+/// 
+/// Per SRS F2: Toggled via Cmd+E, floating and dismissible.
+/// Per AGENTS.md: AI is user-invoked only; no background activity.
+/// Per SECURITY.md: UI must display what will be sent and require confirmation.
+/// 
+/// This view never executes actions directly. It proposes actions via onActionProposed callback.
 struct CommandSurfaceView: View {
+    @Binding var isPresented: Bool
+    
+    @State private var inputText: String = ""
+    @State private var responseText: String = ""
+    @State private var sendContext: Bool = false
+    @State private var selectedText: String? = nil
+    @State private var errorMessage: String? = nil
+    @State private var isSending: Bool = false
+    
+    let webViewWrapper: WebViewWrapper
+    let commandRouter: CommandRouter
+    let gemini: GeminiClient
+    let onActionProposed: (LLMResponse) -> Void
+    
     var body: some View {
-        EmptyView()
+        if isPresented {
+            VStack(spacing: 16) {
+                // Header
+                HStack {
+                    Text("AI Command")
+                        .font(.headline)
+                    Spacer()
+                    Button("Cancel") {
+                        cancel()
+                    }
+                }
+                
+                // Context indicator
+                if sendContext {
+                    HStack {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(.blue)
+                        Text("Will send selected text")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                    .padding(.vertical, 4)
+                }
+                
+                // Input field
+                TextField("Enter your command...", text: $inputText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(3...6)
+                
+                // Include selection toggle
+                Toggle("Include selection", isOn: $sendContext)
+                    .onChange(of: sendContext) { _, newValue in
+                        if newValue {
+                            fetchSelectedText()
+                        } else {
+                            selectedText = nil
+                            errorMessage = nil
+                        }
+                    }
+                
+                // Show selected text preview if available
+                if let selectedText = selectedText, sendContext {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Selected text:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(selectedText)
+                            .font(.caption)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.gray.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                }
+                
+                // Error message
+                if let errorMessage = errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+                
+                // Response text
+                if !responseText.isEmpty {
+                    ScrollView {
+                        Text(responseText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color.gray.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                    .frame(maxHeight: 200)
+                }
+                
+                // Send button
+                Button(action: sendCommand) {
+                    HStack {
+                        if isSending {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                        Text("Send")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(inputText.isEmpty || isSending)
+            }
+            .padding()
+            .frame(width: 500)
+            .background(Color(NSColor.windowBackgroundColor))
+            .cornerRadius(12)
+            .shadow(radius: 10)
+            .onAppear {
+                // Focus input field when overlay appears
+                // Note: Focus management may require additional setup
+            }
+        }
+    }
+    
+    private func fetchSelectedText() {
+        webViewWrapper.evaluateSelectedText { [self] text in
+            if let text = text, !text.isEmpty {
+                selectedText = text
+                errorMessage = nil
+            } else {
+                selectedText = nil
+                errorMessage = "No selection"
+            }
+        }
+    }
+    
+    private func sendCommand() {
+        guard !inputText.isEmpty else { return }
+        
+        isSending = true
+        errorMessage = nil
+        responseText = ""
+        
+        // Get context if toggle is on
+        let context: String?
+        if sendContext {
+            if let selected = selectedText, !selected.isEmpty {
+                context = selected
+            } else {
+                // Try to fetch again
+                webViewWrapper.evaluateSelectedText { [self] text in
+                    if let text = text, !text.isEmpty {
+                        proceedWithSend(context: text)
+                    } else {
+                        DispatchQueue.main.async {
+                            errorMessage = "No selection"
+                            isSending = false
+                        }
+                    }
+                }
+                return
+            }
+        } else {
+            context = nil
+        }
+        
+        proceedWithSend(context: context)
+    }
+    
+    private func proceedWithSend(context: String?) {
+        // Per AGENTS.md: Display what will be sent
+        let promptToSend = inputText
+        let contextToSend = context
+        
+        gemini.generate(prompt: promptToSend, context: contextToSend) { [self] result in
+            DispatchQueue.main.async {
+                isSending = false
+                
+                switch result {
+                case .success(let data):
+                    // Decode LLMResponse
+                    if let response = commandRouter.parseLLMResponse(data) {
+                        responseText = response.text
+                        
+                        // If action is present, propose it (do not execute here)
+                        if let action = response.action {
+                            onActionProposed(response)
+                        }
+                    } else {
+                        errorMessage = "Failed to parse response"
+                    }
+                    
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func cancel() {
+        isPresented = false
+        inputText = ""
+        responseText = ""
+        sendContext = false
+        selectedText = nil
+        errorMessage = nil
+        isSending = false
     }
 }
