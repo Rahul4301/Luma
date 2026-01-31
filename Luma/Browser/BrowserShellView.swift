@@ -20,7 +20,6 @@ struct BrowserShellView: View {
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
-    @State private var showHistorySheet: Bool = false
     @State private var restoreAddressBarOnEscape: Bool = false
     @State private var isFirstLoad: Bool = true
     @FocusState private var addressBarFocused: Bool
@@ -31,6 +30,8 @@ struct BrowserShellView: View {
     private let addressBarHeight: CGFloat = 44
     private let chromeCornerRadius: CGFloat = 14
     private let chromePadding: CGFloat = 6
+
+    private static let historyURL = URL(string: "luma://history")!
 
     var body: some View {
         ZStack {
@@ -151,10 +152,18 @@ struct BrowserShellView: View {
                         HairlineDivider(opacity: 0.15)
                     }
 
-                    // Web content or start page
+                    // Web content, start page, or History tab
                     if let currentId = tabManager.currentTab {
-                        let tabHasURL = (tabManager.tabURL[currentId] ?? nil) != nil
-                        if !tabHasURL {
+                        let tabURL = tabManager.tabURL[currentId] ?? nil
+                        let isHistoryTab = tabURL == Self.historyURL
+                        let isStartPage = tabURL == nil
+                        if isHistoryTab {
+                            HistoryTabView(
+                                entries: tabManager.navigationHistory,
+                                onSelect: { url in openURLFromHistory(url) }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if isStartPage {
                             StartPageView(
                                 entries: tabManager.navigationHistory,
                                 onSelect: { url in
@@ -166,10 +175,10 @@ struct BrowserShellView: View {
                                     addressBarText = url.absoluteString
                                     isFirstLoad = true
                                 },
-                                onOpenHistory: { showHistorySheet = true }
+                                onOpenHistory: { openHistoryTab() }
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
+                        } else if let url = tabURL {
                             ZStack {
                                 WebViewContainer(webView: web.ensureWebView(for: currentId))
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -181,6 +190,9 @@ struct BrowserShellView: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            Color(nsColor: .windowBackgroundColor)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     } else {
                         Color(nsColor: .windowBackgroundColor)
@@ -234,20 +246,6 @@ struct BrowserShellView: View {
                 Text("No action to execute.")
             }
         }
-        .sheet(isPresented: $showHistorySheet) {
-            HistoryView(
-                entries: tabManager.navigationHistory,
-                onSelect: { url in
-                    showHistorySheet = false
-                    if let id = tabManager.currentTab {
-                        web.load(url: url, in: id)
-                        tabManager.navigate(tab: id, to: url)
-                        addressBarText = url.absoluteString
-                    }
-                },
-                onDismiss: { showHistorySheet = false }
-            )
-        }
         .onAppear {
             if tabManager.currentTab == nil {
                 _ = tabManager.newTab(url: nil)
@@ -279,7 +277,7 @@ struct BrowserShellView: View {
                         return nil
                     }
                     if key == "y" {
-                        DispatchQueue.main.async { showHistorySheet = true }
+                        DispatchQueue.main.async { openHistoryTab() }
                         return nil
                     }
                     if key == "l" {
@@ -324,7 +322,9 @@ struct BrowserShellView: View {
 
     private func syncAddressBarFromCurrentTab() {
         if let id = tabManager.currentTab {
-            if let url = web.currentURL {
+            if tabManager.tabURL[id] == Self.historyURL {
+                addressBarText = ""
+            } else if let url = web.currentURL {
                 addressBarText = url.absoluteString
                 tabManager.navigate(tab: id, to: url)
             } else if let url = tabManager.tabURL[id] ?? nil {
@@ -364,6 +364,9 @@ struct BrowserShellView: View {
             _ = web.ensureWebView(for: id)
             web.setActiveTab(id)
             web.load(url: url, in: id)
+        } else if tabManager.tabURL[tabManager.currentTab!] == Self.historyURL {
+            openURLFromHistory(url)
+            return
         } else if let id = tabManager.currentTab {
             tabManager.navigate(tab: id, to: url)
             web.load(url: url, in: id)
@@ -387,6 +390,24 @@ struct BrowserShellView: View {
         web.setActiveTab(id)
         addressBarText = ""
         addressBarFocused = true
+    }
+
+    /// Opens history in a new tab titled "History".
+    private func openHistoryTab() {
+        let id = tabManager.newTab(url: Self.historyURL)
+        web.setActiveTab(id)
+        addressBarText = ""
+        syncAddressBarFromCurrentTab()
+    }
+
+    /// Opens a URL from the history tab in a new tab and switches to it.
+    private func openURLFromHistory(_ url: URL) {
+        let id = tabManager.newTab(url: url)
+        _ = web.ensureWebView(for: id)
+        web.setActiveTab(id)
+        web.load(url: url, in: id)
+        tabManager.navigate(tab: id, to: url)
+        addressBarText = url.absoluteString
     }
 
     private func closeCurrentTab() {
@@ -597,12 +618,11 @@ private struct RecentCard: View {
     }
 }
 
-// MARK: - History sheet (Cmd+Y)
+// MARK: - History tab (Cmd+Y opens in new tab)
 
-private struct HistoryView: View {
+private struct HistoryTabView: View {
     let entries: [HistoryEntry]
     let onSelect: (URL) -> Void
-    let onDismiss: () -> Void
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -612,48 +632,116 @@ private struct HistoryView: View {
     }()
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
                 Text("History")
-                    .font(.headline)
-                Spacer()
-                Button("Done", action: onDismiss)
-                    .keyboardShortcut(.escape, modifiers: [])
-            }
-            .padding()
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
+                    .padding(.bottom, 16)
 
-            Divider()
-
-            if entries.isEmpty {
-                Text("No history yet")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(entries) { entry in
-                    Button {
-                        onSelect(entry.url)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.title)
-                                .lineLimit(1)
-                                .font(.system(size: 13, weight: .medium))
-                            Text(entry.url.absoluteString)
-                                .lineLimit(1)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(Self.dateFormatter.string(from: entry.date))
-                                .font(.caption2)
-                                .foregroundColor(.secondary.opacity(0.8))
+                if entries.isEmpty {
+                    Text("No history yet")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 48)
+                } else {
+                    LazyVStack(spacing: 0) {
+                        ForEach(entries) { entry in
+                            HistoryEntryRow(entry: entry, onSelect: onSelect)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 4)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
                 }
-                .listStyle(.plain)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(minWidth: 400, minHeight: 300)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+private struct HistoryEntryRow: View {
+    let entry: HistoryEntry
+    let onSelect: (URL) -> Void
+
+    @State private var isHovered = false
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    private var isSearch: Bool {
+        let host = entry.url.host?.lowercased() ?? ""
+        return (host.contains("google") || host.contains("bing") || host.contains("duckduckgo"))
+            && (entry.url.path.contains("/search") || entry.url.path == "/")
+    }
+
+    private var searchQuery: String? {
+        guard isSearch else { return nil }
+        let components = URLComponents(url: entry.url, resolvingAgainstBaseURL: false)
+        return components?.queryItems?.first(where: { $0.name == "q" })?.value?.removingPercentEncoding
+    }
+
+    private var displayTitle: String {
+        if let q = searchQuery, !q.isEmpty { return q }
+        return entry.title
+    }
+
+    private var subtitle: String {
+        if isSearch {
+            let host = entry.url.host ?? "search"
+            if host.contains("google") { return "Google search" }
+            if host.contains("bing") { return "Bing search" }
+            if host.contains("duckduckgo") { return "DuckDuckGo search" }
+            return "Search"
+        }
+        return entry.url.host ?? entry.url.absoluteString
+    }
+
+    var body: some View {
+        Button {
+            onSelect(entry.url)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: isSearch ? "magnifyingglass" : "globe")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(displayTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Text(Self.dateFormatter.string(from: entry.date))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary.opacity(0.8))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.primary.opacity(isHovered ? 0.06 : 0))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -752,11 +840,13 @@ private struct TabPill: View {
     @State private var isHovered = false
 
     private var title: String {
-        url?.host ?? url?.absoluteString ?? "New Tab"
+        if let u = url, u.scheme == "luma", u.host == "history" { return "History" }
+        return url?.host ?? url?.absoluteString ?? "New Tab"
     }
 
     private var leadingIcon: String {
-        url == nil ? "globe" : "doc.text"
+        if let u = url, u.scheme == "luma", u.host == "history" { return "clock" }
+        return url == nil ? "globe" : "doc.text"
     }
 
     var body: some View {
