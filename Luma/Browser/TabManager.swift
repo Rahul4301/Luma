@@ -4,16 +4,19 @@ import SwiftUI
 import Combine
 
 /// Manages browser tab lifecycle and navigation state.
-/// 
+///
 /// Per SRS F1 and AGENTS.md: All browser actions must be deterministic and visible.
 /// No persistence in MVP (SRS 2.3).
 final class TabManager: ObservableObject {
     /// Maps tab IDs to their current URLs.
     @Published var tabs: [UUID: URL] = [:]
-    
+
+    /// Ordered tab IDs for tab strip display (insertion order).
+    @Published var orderedTabIds: [UUID] = []
+
     /// The currently active tab ID, if any.
     @Published var currentTab: UUID?
-    
+
     /// Creates a new tab with an optional initial URL.
     /// Sets the new tab as current and returns its ID.
     /// Per SRS F1: Tab creation is deterministic and immediately visible.
@@ -22,19 +25,30 @@ final class TabManager: ObservableObject {
         if let url = url {
             tabs[id] = url
         }
+        orderedTabIds.append(id)
         currentTab = id
         return id
     }
-    
+
     /// Closes the specified tab.
-    /// If the closed tab was current, selects a fallback (previous tab or nil).
+    /// If the closed tab was current, selects a fallback (neighbor in order, or nil).
     /// Per SRS F1: Tab closure is deterministic and immediately visible.
     func closeTab(_ id: UUID) {
+        let wasCurrent = (currentTab == id)
+        let closedIdx = orderedTabIds.firstIndex(of: id)
+
         tabs.removeValue(forKey: id)
-        
-        if currentTab == id {
-            // Select a fallback: use the first remaining tab, or nil if none exist.
-            currentTab = tabs.keys.first
+        orderedTabIds.removeAll { $0 == id }
+
+        if wasCurrent, let idx = closedIdx {
+            // Select neighbor: prefer previous, else next
+            if idx > 0 {
+                currentTab = orderedTabIds[idx - 1]
+            } else if !orderedTabIds.isEmpty {
+                currentTab = orderedTabIds[0]
+            } else {
+                currentTab = nil
+            }
         }
     }
     

@@ -13,9 +13,12 @@ import Combine
 /// - No JS bridge message handlers in MVP (minimal attack surface).
 final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var currentURL: URL?
-    
+
+    /// Called when navigation completes; used to sync address bar.
+    var onURLChanged: ((URL?) -> Void)?
+
     private var webView: WKWebView!
-    
+
     override init() {
         super.init()
         
@@ -74,7 +77,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         DispatchQueue.main.async { [weak self] in
-            self?.currentURL = webView.url
+            guard let self = self else { return }
+            self.currentURL = webView.url
+            self.onURLChanged?(webView.url)
         }
     }
 }

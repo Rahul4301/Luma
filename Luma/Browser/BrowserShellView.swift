@@ -2,49 +2,120 @@
 import SwiftUI
 import WebKit
 import AppKit
+import Combine
+
+/// Stores WebViewWrapper instances per tab. Defined here to avoid new file (constraint).
+private final class TabWebViewStore: ObservableObject {
+    @Published private(set) var wrappers: [UUID: WebViewWrapper] = [:]
+    /// Fire to signal that the address bar should sync from the current tab's URL.
+    var onURLChangedNeedsSync: (() -> Void)?
+
+    func wrapper(for id: UUID) -> WebViewWrapper {
+        if let w = wrappers[id] { return w }
+        let w = WebViewWrapper()
+        let store = self
+        w.onURLChanged = { [weak store] _ in
+            DispatchQueue.main.async { store?.onURLChangedNeedsSync?() }
+        }
+        wrappers[id] = w
+        return w
+    }
+
+    func remove(id: UUID) {
+        wrappers.removeValue(forKey: id)
+    }
+}
 
 /// Minimal browser shell hosting a WKWebView via WebViewWrapper and TabManager.
 ///
 /// Per SRS: WebKit-only renderer, minimal tab UI, address bar.
+/// Omnibox: accepts full URL, domain, or search query.
 /// Per SECURITY.md: No JS message handlers, no HTML scraping.
 struct BrowserShellView: View {
     @StateObject private var tabManager = TabManager()
-    @StateObject private var web = WebViewWrapper()
-    @State private var addressBarText: String = "https://example.com"
+    @StateObject private var webViewStore = TabWebViewStore()
+    @State private var addressBarText: String = ""
     @State private var isCommandSurfacePresented: Bool = false
     @State private var eventMonitor: Any?
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
     @State private var lastActionResultText: String = ""
-    
+
     // Deterministic, reused dependencies for the command surface.
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
-    
+
+    /// WebView for the current tab, or a fallback when no tab exists (e.g. for AI command surface).
+    private var currentWebView: WebViewWrapper {
+        if let id = tabManager.currentTab {
+            return webViewStore.wrapper(for: id)
+        }
+        return fallbackWebView
+    }
+    @StateObject private var fallbackWebView = WebViewWrapper()
+
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                // Top bar: address field + Go button
+                // Tab strip: new tab + tab pills
+                HStack(spacing: 4) {
+                    Button(action: { _ = tabManager.newTab(url: nil) }) {
+                        Image(systemName: "plus")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 2) {
+                            ForEach(tabManager.orderedTabIds, id: \.self) { tabId in
+                                TabPill(
+                                    tabId: tabId,
+                                    url: tabManager.tabs[tabId],
+                                    isActive: tabManager.currentTab == tabId,
+                                    onSelect: { tabManager.switchToTab(tabId) },
+                                    onClose: { tabManager.closeTab(tabId); webViewStore.remove(id: tabId) }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor))
+
+                // Omnibox: address bar + Go
                 HStack {
-                    TextField("Enter URL", text: $addressBarText, onCommit: goToAddress)
+                    TextField("Search or enter URL", text: $addressBarText, onCommit: goToAddress)
                         .textFieldStyle(.roundedBorder)
                     Button("Go") {
                         goToAddress()
                     }
                 }
                 .padding()
-                
-                // Web content
-                WebViewContainer(webViewWrapper: web)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Web content for current tab
+                if let currentId = tabManager.currentTab {
+                    WebViewContainer(webViewWrapper: webViewStore.wrapper(for: currentId))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .id(currentId)
+                } else {
+                    Color(nsColor: .windowBackgroundColor)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay(
+                            Text("Click + to add a tab")
+                                .foregroundColor(.secondary)
+                        )
+                }
             }
             
             // Command surface overlay
             if isCommandSurfacePresented {
                 Color.black.opacity(0.25)
                     .ignoresSafeArea()
-                
+
                 VStack {
                     HStack {
                         Spacer()
@@ -54,10 +125,10 @@ struct BrowserShellView: View {
                         .keyboardShortcut(.escape, modifiers: [])
                     }
                     .padding(.horizontal)
-                    
+
                     CommandSurfaceView(
                         isPresented: $isCommandSurfacePresented,
-                        webViewWrapper: web,
+                        webViewWrapper: currentWebView,
                         commandRouter: router,
                         gemini: gemini
                     ) { response in
@@ -88,31 +159,26 @@ struct BrowserShellView: View {
             }
         }
         .onAppear {
-            // On first launch, create a tab and load https://example.com
+            webViewStore.onURLChangedNeedsSync = { syncAddressBarFromCurrentTab() }
             if tabManager.currentTab == nil {
-                if let url = URL(string: "https://example.com") {
-                    _ = tabManager.newTab(url: url)
-                    web.load(url: url)
-                    addressBarText = url.absoluteString
-                }
-            } else if let currentId = tabManager.currentTab,
-                      let url = tabManager.tabs[currentId] {
+                let url = URL(string: "https://www.google.com")!
+                let id = tabManager.newTab(url: url)
+                webViewStore.wrapper(for: id).load(url: url)
                 addressBarText = url.absoluteString
-                web.load(url: url)
             }
-            
-            // Install local key down monitor for Cmd+E
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 if event.modifierFlags.contains(.command),
                    event.charactersIgnoringModifiers == "e" {
                     DispatchQueue.main.async {
                         toggleCommandSurface()
                     }
-                    // Return nil to consume the event
                     return nil
                 }
                 return event
             }
+        }
+        .onChange(of: tabManager.currentTab) { _, _ in
+            syncAddressBarFromCurrentTab()
         }
         .onDisappear {
             // Remove local event monitor if installed
@@ -123,30 +189,56 @@ struct BrowserShellView: View {
         }
     }
     
-    /// Normalizes and navigates to the URL in the address bar.
-    private func goToAddress() {
-        let trimmed = addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        
-        let normalized: String
-        if trimmed.contains("://") {
-            normalized = trimmed
+    /// Syncs the address bar text from the current tab's URL.
+    private func syncAddressBarFromCurrentTab() {
+        if let id = tabManager.currentTab {
+            let w = webViewStore.wrapper(for: id)
+            if let url = w.currentURL {
+                addressBarText = url.absoluteString
+                tabManager.navigateCurrentTab(to: url)
+            } else if let url = tabManager.tabs[id] {
+                addressBarText = url.absoluteString
+            } else {
+                addressBarText = ""
+            }
         } else {
-            normalized = "https://" + trimmed
+            addressBarText = ""
         }
-        
-        guard let url = URL(string: normalized) else {
-            return
+    }
+
+    /// Resolves address bar input to a URL: full URL, domain, or search query.
+    /// Per user request: behaves like a normal browser/search engine.
+    private func resolveToURL(_ input: String) -> URL? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.contains("://") {
+            return URL(string: trimmed)
         }
-        
+
+        if !trimmed.contains(" "), (trimmed.contains(".") || trimmed.contains(":")) {
+            if let url = URL(string: "https://" + trimmed) {
+                return url
+            }
+        }
+
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
+        return URL(string: "https://www.google.com/search?q=" + encoded)
+    }
+
+    /// Navigates to the resolved URL from the address bar (omnibox: URL, domain, or search).
+    private func goToAddress() {
+        guard let url = resolveToURL(addressBarText) else { return }
+
         if tabManager.currentTab == nil {
-            _ = tabManager.newTab(url: url)
+            let id = tabManager.newTab(url: url)
+            webViewStore.wrapper(for: id).load(url: url)
         } else {
             tabManager.navigateCurrentTab(to: url)
+            webViewStore.wrapper(for: tabManager.currentTab!).load(url: url)
         }
-        
-        web.load(url: url)
-        addressBarText = normalized
+
+        addressBarText = url.absoluteString
     }
     
     /// Toggles the AI command surface overlay visibility.
@@ -157,17 +249,73 @@ struct BrowserShellView: View {
     /// Executes the pending action after explicit user confirmation.
     private func executePendingAction() {
         guard let action = pendingAction else { return }
-        
-        // Deterministic, single action execution per confirmation.
+
+        let tabToClose: UUID?
+        if action.type == .close_tab, action.payload?["index"] == nil {
+            tabToClose = tabManager.currentTab
+        } else {
+            tabToClose = nil
+        }
+
         let result = router.execute(action: action, tabManager: tabManager)
         switch result {
         case .success(let message):
             lastActionResultText = "Success: \(message)"
+            if let id = tabToClose {
+                webViewStore.remove(id: id)
+            }
+            if action.type == .new_tab || action.type == .navigate,
+               let urlString = action.payload?["url"],
+               let url = URL(string: urlString.contains("://") ? urlString : "https://" + urlString) {
+                if action.type == .new_tab, let id = tabManager.currentTab {
+                    webViewStore.wrapper(for: id).load(url: url)
+                    addressBarText = url.absoluteString
+                } else if action.type == .navigate, let id = tabManager.currentTab {
+                    webViewStore.wrapper(for: id).load(url: url)
+                    addressBarText = url.absoluteString
+                }
+            }
         case .failure(let error):
             lastActionResultText = "Error: \(error.localizedDescription)"
         }
-        
+
         pendingAction = nil
+    }
+}
+
+/// A single tab pill in the tab strip.
+private struct TabPill: View {
+    let tabId: UUID
+    let url: URL?
+    let isActive: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    private var title: String {
+        url?.host ?? url?.absoluteString ?? "New Tab"
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: onSelect) {
+                Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 120)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 8)
+            .padding(.vertical, 4)
+            .background(isActive ? Color.accentColor.opacity(0.2) : Color.clear)
+            .cornerRadius(4)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 
