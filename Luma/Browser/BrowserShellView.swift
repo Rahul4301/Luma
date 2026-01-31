@@ -91,7 +91,7 @@ struct BrowserShellView: View {
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 11))
                                     .foregroundStyle(.secondary)
-                                TextField("Search or enter website", text: $addressBarText)
+                                TextField("Search or enter website name", text: $addressBarText)
                                     .textFieldStyle(.plain)
                                     .focused($addressBarFocused)
                                     .onSubmit { navigateFromAddressBar() }
@@ -126,9 +126,15 @@ struct BrowserShellView: View {
                         .frame(maxWidth: .infinity)
                     }
                     .padding(chromePadding)
-                    .background(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
+                    .background(
+                        tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
+                            ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
+                            : AnyView(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
+                    )
 
-                    HairlineDivider(opacity: 0.15)
+                    if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil {
+                        HairlineDivider(opacity: 0.15)
+                    }
 
                     // Web content or start page
                     if let currentId = tabManager.currentTab {
@@ -438,136 +444,141 @@ private struct StartPageView: View {
     let onSelect: (URL) -> Void
     let onOpenHistory: () -> Void
 
-    private static let suggested: [(String, String)] = [
-        ("Google", "https://www.google.com"),
-        ("Wikipedia", "https://www.wikipedia.org"),
-        ("GitHub", "https://github.com"),
+    private static let favorites: [(String, String, String)] = [
+        ("Google", "https://www.google.com", "magnifyingglass"),
+        ("Wikipedia", "https://www.wikipedia.org", "book.closed"),
+        ("GitHub", "https://github.com", "chevron.left.forwardslash.chevron.right"),
+        ("YouTube", "https://www.youtube.com", "play.rectangle"),
     ]
+
+    private let pageBg = Color(white: 0.11)
+    private let sectionTitle = Color.white.opacity(0.9)
+    private let muted = Color.white.opacity(0.5)
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Start")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 32) {
+                // Favorites — large icon tiles
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Favorites")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(sectionTitle)
 
-                Text("Type a URL or search in the bar above.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-
-                if !entries.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Recent")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("All history", action: onOpenHistory)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(entries.prefix(12)) { entry in
-                                Button {
-                                    onSelect(entry.url)
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        Image(systemName: "globe")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 20, alignment: .center)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(entry.title)
-                                                .font(.system(size: 13, weight: .medium))
-                                                .lineLimit(1)
-                                            Text(entry.url.absoluteString)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        Spacer()
-                                        Image(systemName: "arrow.right")
-                                            .font(.system(size: 10, weight: .medium))
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                }
-                                .buttonStyle(.plain)
+                    HStack(spacing: 16) {
+                        ForEach(Self.favorites, id: \.1) { title, urlString, iconName in
+                            if let url = URL(string: urlString) {
+                                FavoriteTile(
+                                    title: title,
+                                    iconName: iconName,
+                                    action: { onSelect(url) }
+                                )
                             }
                         }
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Quick links")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    FlowLayout(spacing: 8) {
-                        ForEach(Self.suggested, id: \.1) { title, urlString in
-                            if let url = URL(string: urlString) {
-                                Button {
-                                    onSelect(url)
-                                } label: {
-                                    Text(title)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .background(.ultraThinMaterial)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                }
+                // Recent — grid of cards (when history exists)
+                if !entries.isEmpty {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("Recent")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(sectionTitle)
+                            Spacer()
+                            Button("All history", action: onOpenHistory)
+                                .font(.system(size: 12))
+                                .foregroundColor(muted)
                                 .buttonStyle(.plain)
+                        }
+
+                        LazyVGrid(columns: [
+                            GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12),
+                        ], spacing: 12) {
+                            ForEach(entries.prefix(12)) { entry in
+                                RecentCard(entry: entry) { onSelect(entry.url) }
                             }
                         }
                     }
                 }
             }
-            .padding(24)
+            .padding(28)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(pageBg)
     }
 }
 
-/// Simple flow layout for quick-link buttons.
-private struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
+private struct FavoriteTile: View {
+    let title: String
+    let iconName: String
+    let action: () -> Void
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = arrange(proposal: proposal, subviews: subviews)
-        return result.size
-    }
+    @State private var isHovered = false
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrange(proposal: proposal, subviews: subviews)
-        for (i, frame) in result.frames.enumerated() {
-            subviews[i].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: .unspecified)
-        }
-    }
-
-    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
-        let maxWidth = proposal.width ?? 400
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var frames: [CGRect] = []
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x + size.width > maxWidth, x > 0 {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                Image(systemName: iconName)
+                    .font(.system(size: 24))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(width: 56, height: 56)
+                    .background(Color.white.opacity(isHovered ? 0.18 : 0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+                    .lineLimit(1)
             }
-            frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
+            .frame(width: 88)
+            .padding(10)
+            .background(Color.white.opacity(isHovered ? 0.08 : 0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
         }
-        let totalHeight = y + rowHeight
-        return (CGSize(width: maxWidth, height: totalHeight), frames)
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct RecentCard: View {
+    let entry: HistoryEntry
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "globe")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                        .lineLimit(1)
+                    Text(entry.url.host ?? entry.url.absoluteString)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.45))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.3))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.white.opacity(isHovered ? 0.12 : 0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 
