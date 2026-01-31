@@ -28,8 +28,7 @@ struct BrowserShellView: View {
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
 
-    private let tabRowHeight: CGFloat = 26
-    private let addressBarHeight: CGFloat = 30
+    private let addressBarHeight: CGFloat = 44
     private let chromeCornerRadius: CGFloat = 14
     private let chromePadding: CGFloat = 6
 
@@ -40,34 +39,15 @@ struct BrowserShellView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    // Single top chrome (glass): tabs + omnibox
-                    VStack(spacing: 0) {
-                        // Tab strip
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 4) {
-                                ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
-                                    TabPill(
-                                        tabId: tabId,
-                                        index: index + 1,
-                                        url: tabManager.tabURL[tabId] ?? nil,
-                                        isActive: tabManager.currentTab == tabId,
-                                        onSelect: { switchToTab(tabId) },
-                                        onClose: { closeTab(tabId) }
-                                    )
-                                    .id(tabId)
-                                }
-                            }
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 4)
-                        }
-                        .frame(height: tabRowHeight)
-                        .frame(maxWidth: .infinity)
-
-                        // Address bar row
-                        HStack(spacing: 8) {
+                    // Address bar row (Chrome-style omnibox)
+                    HStack(spacing: 6) {
+                        // Nav buttons (rounded)
+                        HStack(spacing: 2) {
                             Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
                                 Image(systemName: "chevron.left")
                                     .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Back")
@@ -75,6 +55,8 @@ struct BrowserShellView: View {
                             Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Forward")
@@ -82,49 +64,63 @@ struct BrowserShellView: View {
                             Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Reload")
-
-                            // Omnibox (glass pill)
-                            HStack(spacing: 6) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                TextField("Search or enter website name", text: $addressBarText)
-                                    .textFieldStyle(.plain)
-                                    .focused($addressBarFocused)
-                                    .onSubmit { navigateFromAddressBar() }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(.ultraThinMaterial)
-                                    .opacity(addressBarFocused ? 0.95 : 0.85)
-                            )
-                            .animation(.easeInOut(duration: 0.18), value: addressBarFocused)
-
-                            Button(action: toggleAIPanel) {
-                                Text("AI")
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .accessibilityLabel("Toggle AI panel")
-
-                            Button(action: newTab) {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .medium))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("New tab")
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .frame(height: addressBarHeight)
+
+                        // Omnibox (Chrome-style: icon left, large field, magnifier right, focus ring)
+                        HStack(spacing: 8) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+
+                            TextField("Search or enter website name", text: $addressBarText)
+                                .textFieldStyle(.plain)
+                                .focused($addressBarFocused)
+                                .onSubmit { navigateFromAddressBar() }
+
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                         .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color(white: 0.18))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
+                        )
+                        .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
+
+                        // Chat pill button (Chrome-style)
+                        Button(action: toggleAIPanel) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bubble.left.and.bubble.right")
+                                    .font(.system(size: 10, weight: .medium))
+                                Text("Chat")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(white: 0.22).opacity(0.8))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Toggle AI panel")
                     }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .frame(height: addressBarHeight)
+                    .frame(maxWidth: .infinity)
                     .padding(chromePadding)
                     .background(
                         tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
@@ -206,6 +202,21 @@ struct BrowserShellView: View {
                 }
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                TabStripView(
+                    tabManager: tabManager,
+                    contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
+                        ? Color(white: 0.13)
+                        : Color(nsColor: .windowBackgroundColor),
+                    onSwitch: { switchToTab($0) },
+                    onClose: { closeTab($0) },
+                    onNewTab: newTab
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .toolbarBackground(.visible, for: .windowToolbar)
         .alert("Confirm Action", isPresented: $showActionConfirm) {
             Button("Cancel", role: .cancel) { pendingAction = nil }
             Button("Execute") { executePendingAction() }
@@ -677,11 +688,60 @@ private struct PanelResizeHandle: View {
     }
 }
 
+// MARK: - Tab strip (titlebar, leading-aligned)
+
+private struct TabStripView: View {
+    @ObservedObject var tabManager: TabManager
+    let contentAreaColor: Color
+    let onSwitch: (UUID) -> Void
+    let onClose: (UUID) -> Void
+    let onNewTab: () -> Void
+
+    private let rowHeight: CGFloat = 30
+
+    var body: some View {
+        GeometryReader { geo in
+            let count = tabManager.tabCount()
+            let tabWidth: CGFloat = count > 0 ? max(90, (geo.size.width - 59) / CGFloat(count)) : 0
+
+            HStack(spacing: 0) {
+                ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
+                    TabPill(
+                        tabId: tabId,
+                        index: index + 1,
+                        url: tabManager.tabURL[tabId] ?? nil,
+                        isActive: tabManager.currentTab == tabId,
+                        contentAreaColor: contentAreaColor,
+                        onSelect: { onSwitch(tabId) },
+                        onClose: { onClose(tabId) }
+                    )
+                    .frame(width: tabWidth, height: rowHeight)
+                    .id(tabId)
+                }
+
+                Button(action: onNewTab) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: rowHeight - 4)
+                        .contentShape(Rectangle())
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New tab")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: rowHeight)
+    }
+}
+
 private struct TabPill: View {
     let tabId: UUID
     let index: Int
     let url: URL?
     let isActive: Bool
+    let contentAreaColor: Color
     let onSelect: () -> Void
     let onClose: () -> Void
 
@@ -691,48 +751,55 @@ private struct TabPill: View {
         url?.host ?? url?.absoluteString ?? "New Tab"
     }
 
+    private var leadingIcon: String {
+        url == nil ? "globe" : "doc.text"
+    }
+
     var body: some View {
-        HStack(spacing: 4) {
+        ZStack(alignment: .trailing) {
             Button(action: onSelect) {
-                Text(title)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(maxWidth: 140)
+                HStack(spacing: 6) {
+                    Image(systemName: leadingIcon)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .frame(width: 14, alignment: .center)
+
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.leading, 8)
+                .padding(.trailing, 24)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.leading, 6)
-            .padding(.trailing, isHovered ? 3 : 6)
-            .padding(.vertical, 4)
 
-            if isHovered || isActive {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .frame(width: 14, height: 14)
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 6)
-                .accessibilityLabel("Close tab")
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 16, height: 16)
             }
+            .buttonStyle(.plain)
+            .opacity(isHovered || isActive ? 1 : 0)
+            .padding(.trailing, 6)
+            .accessibilityLabel("Close tab")
         }
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.ultraThinMaterial)
-                .opacity(isActive ? 0.9 : (isHovered ? 0.6 : 0.4))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isActive ? Color.accentColor.opacity(0.25) : Color.clear, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(isActive ? 0.04 : 0), radius: 1, y: 0)
-        .scaleEffect(isHovered && !isActive ? 1.01 : 1.0)
-        .animation(.easeInOut(duration: 0.18), value: isHovered)
-        .animation(.easeInOut(duration: 0.18), value: isActive)
         .onHover { hovering in
             isHovered = hovering
         }
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isActive
+                    ? contentAreaColor
+                    : Color(white: 0.22).opacity(isHovered ? 0.9 : 0.6))
+        )
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .animation(.easeInOut(duration: 0.15), value: isActive)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Tab \(index): \(title)")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
