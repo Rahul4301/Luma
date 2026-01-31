@@ -20,6 +20,7 @@ struct BrowserShellView: View {
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
+    @State private var showHistorySheet: Bool = false
     @FocusState private var addressBarFocused: Bool
 
     private let router = CommandRouter()
@@ -156,12 +157,28 @@ struct BrowserShellView: View {
                 Text("No action to execute.")
             }
         }
+        .sheet(isPresented: $showHistorySheet) {
+            HistoryView(
+                entries: tabManager.navigationHistory,
+                onSelect: { url in
+                    showHistorySheet = false
+                    if let id = tabManager.currentTab {
+                        web.load(url: url, in: id)
+                        tabManager.navigate(tab: id, to: url)
+                        addressBarText = url.absoluteString
+                    }
+                },
+                onDismiss: { showHistorySheet = false }
+            )
+        }
         .onAppear {
             if tabManager.currentTab == nil {
                 let url = URL(string: "https://example.com")!
                 let id = tabManager.newTab(url: url)
+                _ = web.ensureWebView(for: id)
                 web.setActiveTab(id)
                 web.load(url: url, in: id)
+                tabManager.addNavigation(title: url.host ?? url.absoluteString, url: url)
                 addressBarText = url.absoluteString
             }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -184,6 +201,10 @@ struct BrowserShellView: View {
                     }
                     if key == "w" {
                         DispatchQueue.main.async { closeCurrentTab() }
+                        return nil
+                    }
+                    if key == "y" {
+                        DispatchQueue.main.async { showHistorySheet = true }
                         return nil
                     }
                 }
@@ -244,19 +265,23 @@ struct BrowserShellView: View {
     private func goToAddress() {
         guard let url = resolveToURL(addressBarText) else { return }
 
+        let title = url.host ?? url.absoluteString
         if tabManager.currentTab == nil {
             let id = tabManager.newTab(url: url)
+            _ = web.ensureWebView(for: id)
             web.setActiveTab(id)
             web.load(url: url, in: id)
         } else if let id = tabManager.currentTab {
             tabManager.navigate(tab: id, to: url)
             web.load(url: url, in: id)
         }
+        tabManager.addNavigation(title: title, url: url)
         addressBarText = url.absoluteString
     }
 
     private func newTab() {
         let id = tabManager.newTab(url: nil)
+        _ = web.ensureWebView(for: id)
         web.setActiveTab(id)
         addressBarText = ""
         addressBarFocused = true
@@ -322,6 +347,66 @@ struct BrowserShellView: View {
         }
 
         pendingAction = nil
+    }
+}
+
+// MARK: - History sheet (Cmd+Y)
+
+private struct HistoryView: View {
+    let entries: [HistoryEntry]
+    let onSelect: (URL) -> Void
+    let onDismiss: () -> Void
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("History")
+                    .font(.headline)
+                Spacer()
+                Button("Done", action: onDismiss)
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
+            .padding()
+
+            Divider()
+
+            if entries.isEmpty {
+                Text("No history yet")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(entries) { entry in
+                    Button {
+                        onSelect(entry.url)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title)
+                                .lineLimit(1)
+                                .font(.system(size: 13, weight: .medium))
+                            Text(entry.url.absoluteString)
+                                .lineLimit(1)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(Self.dateFormatter.string(from: entry.date))
+                                .font(.caption2)
+                                .foregroundColor(.secondary.opacity(0.8))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .frame(minWidth: 400, minHeight: 300)
     }
 }
 
