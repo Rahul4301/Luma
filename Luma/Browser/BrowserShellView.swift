@@ -21,86 +21,91 @@ struct BrowserShellView: View {
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
     @State private var showHistorySheet: Bool = false
+    @State private var restoreAddressBarOnEscape: Bool = false
     @FocusState private var addressBarFocused: Bool
 
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
 
-    private let tabBarHeight: CGFloat = 40
+    private let tabRowHeight: CGFloat = 36
+    private let addressBarHeight: CGFloat = 40
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                // Unified top chrome: tabs + address bar + nav
-                HStack(spacing: 0) {
-                    // Tab strip (pill-shaped, scrollable)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        ScrollViewReader { proxy in
-                            HStack(spacing: 4) {
-                                ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
-                                    TabPill(
-                                        tabId: tabId,
-                                        index: index + 1,
-                                        url: tabManager.tabURL[tabId] ?? nil,
-                                        isActive: tabManager.currentTab == tabId,
-                                        onSelect: { switchToTab(tabId) },
-                                        onClose: { closeTab(tabId) }
-                                    )
-                                    .id(tabId)
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
+                // Row 1: Tab strip (full width, directly on top)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
+                            TabPill(
+                                tabId: tabId,
+                                index: index + 1,
+                                url: tabManager.tabURL[tabId] ?? nil,
+                                isActive: tabManager.currentTab == tabId,
+                                onSelect: { switchToTab(tabId) },
+                                onClose: { closeTab(tabId) }
+                            )
+                            .id(tabId)
                         }
-                    }
-                    .frame(minWidth: 80, maxWidth: 280)
-
-                    // Address bar (continuous strip from tabs)
-                    HStack(spacing: 6) {
-                        Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Back")
-
-                        Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Forward")
-
-                        Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Reload")
-
-                        TextField("Search or enter URL", text: $addressBarText, onCommit: goToAddress)
-                            .textFieldStyle(.plain)
-                            .focused($addressBarFocused)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
-                            .cornerRadius(6)
-
-                        Button("Go", action: goToAddress)
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-
-                        Button(action: newTab) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("New tab")
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                 }
-                .frame(height: tabBarHeight)
+                .frame(height: tabRowHeight)
+                .frame(maxWidth: .infinity)
+                .background(.ultraThinMaterial)
+
+                // Row 2: Address bar (full width below tabs)
+                HStack(spacing: 6) {
+                    Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
+
+                    Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Forward")
+
+                    Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Reload")
+
+                    TextField("Search or enter URL", text: $addressBarText)
+                        .textFieldStyle(.plain)
+                        .focused($addressBarFocused)
+                        .onSubmit { navigateFromAddressBar() }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
+                        .cornerRadius(6)
+
+                    Button(action: toggleAIPanel) {
+                        Text("AI")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Toggle AI panel")
+
+                    Button(action: newTab) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("New tab")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(height: addressBarHeight)
+                .frame(maxWidth: .infinity)
                 .background(.ultraThinMaterial)
 
                 // Main content (flush under chrome)
@@ -207,6 +212,15 @@ struct BrowserShellView: View {
                         DispatchQueue.main.async { showHistorySheet = true }
                         return nil
                     }
+                    if key == "l" {
+                        DispatchQueue.main.async { addressBarFocused = true }
+                        return nil
+                    }
+                }
+                if event.keyCode == 53 {
+                    // Escape: restore address bar to live URL and stop editing
+                    DispatchQueue.main.async { restoreAddressBarOnEscape = true }
+                    return nil
                 }
                 return event
             }
@@ -221,6 +235,13 @@ struct BrowserShellView: View {
         }
         .onChange(of: web.currentURL) { _, _ in
             syncAddressBarFromCurrentTab()
+        }
+        .onChange(of: restoreAddressBarOnEscape) { _, new in
+            if new {
+                syncAddressBarFromCurrentTab()
+                addressBarFocused = false
+                restoreAddressBarOnEscape = false
+            }
         }
         .onDisappear {
             if let m = eventMonitor {
@@ -262,7 +283,8 @@ struct BrowserShellView: View {
         return URL(string: "https://www.google.com/search?q=" + encoded)
     }
 
-    private func goToAddress() {
+    /// Navigate from address bar (Enter/Return). Uses omnibox rules; no navigation until Enter.
+    private func navigateFromAddressBar() {
         guard let url = resolveToURL(addressBarText) else { return }
 
         let title = url.host ?? url.absoluteString
@@ -277,6 +299,15 @@ struct BrowserShellView: View {
         }
         tabManager.addNavigation(title: title, url: url)
         addressBarText = url.absoluteString
+    }
+
+    private func toggleAIPanel() {
+        guard let id = tabManager.currentTab else { return }
+        if tabsWithPanelOpen.contains(id) {
+            tabsWithPanelOpen.remove(id)
+        } else {
+            tabsWithPanelOpen.insert(id)
+        }
     }
 
     private func newTab() {
