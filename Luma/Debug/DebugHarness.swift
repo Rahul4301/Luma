@@ -146,7 +146,7 @@ final class DebugHarness {
         let tabId = tabManager.newTab(url: exampleURL)
         print("✓ Created tab: \(tabId.uuidString)")
         print("  Current tab: \(tabManager.currentTab?.uuidString ?? "nil")")
-        print("  Tab URL: \(tabManager.tabs[tabId]?.absoluteString ?? "nil")")
+        print("  Tab URL: \((tabManager.tabURL[tabId] ?? nil)?.absoluteString ?? "nil")")
         
         // Load URL in WebViewWrapper
         webViewWrapper.load(url: exampleURL)
@@ -205,7 +205,7 @@ final class DebugHarness {
         case .success(let message):
             print("✓ Action executed successfully: \(message)")
             if let currentTab = tabManager.currentTab {
-                print("  Current tab URL: \(tabManager.tabs[currentTab]?.absoluteString ?? "nil")")
+                print("  Current tab URL: \((tabManager.tabURL[currentTab] ?? nil)?.absoluteString ?? "nil")")
             }
         case .failure(let error):
             print("ERROR: Action execution failed: \(error.localizedDescription)")

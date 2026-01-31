@@ -5,8 +5,10 @@ import AppKit
 import Combine
 
 /// Stores WebViewWrapper instances per tab. Defined here to avoid new file (constraint).
+/// Uses plain storage (not @Published) to avoid "Publishing changes from within view updates" —
+/// the view reacts to TabManager, not to wrapper additions.
 private final class TabWebViewStore: ObservableObject {
-    @Published private(set) var wrappers: [UUID: WebViewWrapper] = [:]
+    private var wrappers: [UUID: WebViewWrapper] = [:]
     /// Fire to signal that the address bar should sync from the current tab's URL.
     var onURLChangedNeedsSync: (() -> Void)?
 
@@ -68,10 +70,10 @@ struct BrowserShellView: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 2) {
-                            ForEach(tabManager.orderedTabIds, id: \.self) { tabId in
+                            ForEach(tabManager.tabOrder, id: \.self) { tabId in
                                 TabPill(
                                     tabId: tabId,
-                                    url: tabManager.tabs[tabId],
+                                    url: tabManager.tabURL[tabId] ?? nil,
                                     isActive: tabManager.currentTab == tabId,
                                     onSelect: { tabManager.switchToTab(tabId) },
                                     onClose: { tabManager.closeTab(tabId); webViewStore.remove(id: tabId) }
@@ -196,7 +198,7 @@ struct BrowserShellView: View {
             if let url = w.currentURL {
                 addressBarText = url.absoluteString
                 tabManager.navigateCurrentTab(to: url)
-            } else if let url = tabManager.tabs[id] {
+            } else if let url = tabManager.tabURL[id] ?? nil {
                 addressBarText = url.absoluteString
             } else {
                 addressBarText = ""

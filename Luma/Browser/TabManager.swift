@@ -8,62 +8,62 @@ import Combine
 /// Per SRS F1 and AGENTS.md: All browser actions must be deterministic and visible.
 /// No persistence in MVP (SRS 2.3).
 final class TabManager: ObservableObject {
-    /// Maps tab IDs to their current URLs.
-    @Published var tabs: [UUID: URL] = [:]
+    @Published var tabOrder: [UUID] = []
+    @Published var tabURL: [UUID: URL?] = [:]
+    @Published var currentTab: UUID? = nil
 
-    /// Ordered tab IDs for tab strip display (insertion order).
-    @Published var orderedTabIds: [UUID] = []
-
-    /// The currently active tab ID, if any.
-    @Published var currentTab: UUID?
-
-    /// Creates a new tab with an optional initial URL.
-    /// Sets the new tab as current and returns its ID.
-    /// Per SRS F1: Tab creation is deterministic and immediately visible.
-    func newTab(url: URL? = nil) -> UUID {
+    func newTab(url: URL?) -> UUID {
         let id = UUID()
-        if let url = url {
-            tabs[id] = url
-        }
-        orderedTabIds.append(id)
+        tabOrder.append(id)
+        tabURL[id] = url
         currentTab = id
         return id
     }
 
-    /// Closes the specified tab.
-    /// If the closed tab was current, selects a fallback (neighbor in order, or nil).
-    /// Per SRS F1: Tab closure is deterministic and immediately visible.
     func closeTab(_ id: UUID) {
         let wasCurrent = (currentTab == id)
-        let closedIdx = orderedTabIds.firstIndex(of: id)
+        let closedIdx = tabOrder.firstIndex(of: id)
 
-        tabs.removeValue(forKey: id)
-        orderedTabIds.removeAll { $0 == id }
+        tabOrder.removeAll { $0 == id }
+        tabURL.removeValue(forKey: id)
 
         if wasCurrent, let idx = closedIdx {
-            // Select neighbor: prefer previous, else next
             if idx > 0 {
-                currentTab = orderedTabIds[idx - 1]
-            } else if !orderedTabIds.isEmpty {
-                currentTab = orderedTabIds[0]
+                currentTab = tabOrder[idx - 1]
+            } else if !tabOrder.isEmpty {
+                currentTab = tabOrder[0]
             } else {
                 currentTab = nil
             }
         }
     }
-    
-    /// Switches to the specified tab.
-    /// Per SRS F1: Tab switching is deterministic and immediately visible.
+
     func switchToTab(_ id: UUID) {
-        guard tabs.keys.contains(id) else { return }
+        guard tabOrder.contains(id) else { return }
         currentTab = id
     }
-    
-    /// Navigates the current tab to the specified URL.
-    /// Updates the tab mapping and notifies observers.
-    /// Per SRS F1 and AGENTS.md: Navigation actions are deterministic and visible.
+
+    func navigate(tab id: UUID, to url: URL) {
+        guard tabOrder.contains(id) else { return }
+        tabURL[id] = url
+    }
+
     func navigateCurrentTab(to url: URL) {
         guard let currentId = currentTab else { return }
-        tabs[currentId] = url
+        tabURL[currentId] = url
+    }
+
+    func currentURL() -> URL? {
+        guard let id = currentTab else { return nil }
+        return tabURL[id] ?? nil
+    }
+
+    func currentIndex() -> Int? {
+        guard let id = currentTab else { return nil }
+        return tabOrder.firstIndex(of: id)
+    }
+
+    func tabCount() -> Int {
+        tabOrder.count
     }
 }
