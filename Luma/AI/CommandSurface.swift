@@ -17,11 +17,15 @@ struct CommandSurfaceView: View {
     let onActionProposed: (LLMResponse) -> Void
 
     @State private var inputText: String = ""
-    @State private var sendContext: Bool = false
-    @State private var selectedText: String? = nil
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
     @State private var actionProposedMessage: String? = nil
+
+    // Auto-loaded page context
+    @State private var pageTitle: String? = nil
+    @State private var pageText: String? = nil
+    @State private var isLoadingContext: Bool = false
+    @State private var contextRefreshTimer: Timer? = nil
 
     private let darkBg = Color(red: 0.08, green: 0.08, blue: 0.1)
     private let darkBgSecondary = Color(red: 0.12, green: 0.12, blue: 0.15)
@@ -50,6 +54,9 @@ struct CommandSurfaceView: View {
             // AI Status row
             aiStatusRow()
 
+            // Page context preview (shows what will be sent)
+            contextPreviewRow()
+
             // Chat history
             ScrollViewReader { proxy in
                 ScrollView {
@@ -73,15 +80,6 @@ struct CommandSurfaceView: View {
 
             // Input area
             VStack(spacing: 8) {
-                if sendContext, let selectedText = selectedText, !selectedText.isEmpty {
-                    HStack {
-                        Text("Including selection")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.6))
-                        Spacer()
-                    }
-                }
-
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField("Message...", text: $inputText)
                         .textFieldStyle(.plain)
@@ -101,17 +99,6 @@ struct CommandSurfaceView: View {
                 }
 
                 HStack {
-                    Toggle(isOn: $sendContext) {
-                        Text("Include selection")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    .toggleStyle(.checkbox)
-                    .onChange(of: sendContext) { _, newValue in
-                        if newValue { fetchSelectedText() }
-                        else { selectedText = nil; errorMessage = nil }
-                    }
-
                     if let msg = actionProposedMessage {
                         Text(msg)
                             .font(.caption2)
@@ -133,6 +120,13 @@ struct CommandSurfaceView: View {
         }
         .background(darkBg)
         .foregroundColor(.white)
+        .onAppear {
+            loadPageContext()
+            startContextRefreshTimer()
+        }
+        .onDisappear {
+            stopContextRefreshTimer()
+        }
     }
 
     private func sendIfEnter() {
@@ -195,25 +189,111 @@ struct CommandSurfaceView: View {
     }
 
     private func close() {
+        stopContextRefreshTimer()
         isPresented = false
         inputText = ""
-        sendContext = false
-        selectedText = nil
         errorMessage = nil
         isSending = false
         actionProposedMessage = nil
     }
 
-    private func fetchSelectedText() {
-        webViewWrapper.evaluateSelectedText { text in
-            if let text = text, !text.isEmpty {
-                selectedText = text
-                errorMessage = nil
-            } else {
-                selectedText = nil
-                errorMessage = "No selection"
+    /// Starts a timer to refresh context every 3 seconds.
+    private func startContextRefreshTimer() {
+        stopContextRefreshTimer()
+        contextRefreshTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            loadPageContext()
+        }
+    }
+
+    /// Stops the context refresh timer.
+    private func stopContextRefreshTimer() {
+        contextRefreshTimer?.invalidate()
+        contextRefreshTimer = nil
+    }
+
+    /// Loads page context (title + visible text) when panel appears.
+    private func loadPageContext() {
+        isLoadingContext = true
+        let group = DispatchGroup()
+
+        group.enter()
+        webViewWrapper.evaluatePageTitle { title in
+            pageTitle = title
+            group.leave()
+        }
+
+        group.enter()
+        webViewWrapper.evaluateVisibleText(maxChars: 4000) { text in
+            pageText = text
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            isLoadingContext = false
+        }
+    }
+
+    /// Builds context string from page metadata.
+    private func buildContextString() -> String? {
+        var parts: [String] = []
+
+        if let url = webViewWrapper.currentURL {
+            parts.append("URL: \(url.absoluteString)")
+        }
+
+        if let title = pageTitle, !title.isEmpty {
+            parts.append("Title: \(title)")
+        }
+
+        if let text = pageText, !text.isEmpty {
+            // Truncate for display but send full 4k
+            parts.append("Page content:\n\(text)")
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    @ViewBuilder
+    private func contextPreviewRow() -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.5))
+                Text("Context")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.5))
+                Spacer()
+                if isLoadingContext {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                }
+            }
+
+            if let url = webViewWrapper.currentURL {
+                Text(url.host ?? url.absoluteString)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1)
+            }
+
+            if let title = pageTitle, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.8))
+                    .lineLimit(1)
+            }
+
+            if let text = pageText, !text.isEmpty {
+                Text(text.prefix(150) + (text.count > 150 ? "..." : ""))
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.5))
+                    .lineLimit(2)
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.03))
     }
 
     private func sendCommand() {
@@ -228,27 +308,8 @@ struct CommandSurfaceView: View {
         messages.append(userMsg)
         inputText = ""
 
-        let context: String?
-        if sendContext {
-            if let selected = selectedText, !selected.isEmpty {
-                context = selected
-            } else {
-                webViewWrapper.evaluateSelectedText { text in
-                    if let text = text, !text.isEmpty {
-                        proceedWithSend(prompt: trimmed, context: text)
-                    } else {
-                        DispatchQueue.main.async {
-                            errorMessage = "No selection"
-                            isSending = false
-                        }
-                    }
-                }
-                return
-            }
-        } else {
-            context = nil
-        }
-
+        // Always include page context
+        let context = buildContextString()
         proceedWithSend(prompt: trimmed, context: context)
     }
 

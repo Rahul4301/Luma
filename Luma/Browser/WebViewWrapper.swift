@@ -75,6 +75,50 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
         evaluateSelectedText(in: tabId, completion: completion)
     }
 
+    /// Extracts the page title from the active tab.
+    func evaluatePageTitle(completion: @escaping (String?) -> Void) {
+        guard let tabId = activeTab, let wv = webViews[tabId] else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        wv.evaluateJavaScript("document.title") { result, error in
+            DispatchQueue.main.async {
+                if error != nil {
+                    completion(nil)
+                    return
+                }
+                if let title = result as? String, !title.isEmpty {
+                    completion(title)
+                } else {
+                    completion(nil)
+                }
+            }
+        }
+    }
+
+    /// Extracts visible text from the page, bounded to maxChars (default 4000, hard max 12000 per AGENTS.md).
+    func evaluateVisibleText(maxChars: Int = 4000, completion: @escaping (String?) -> Void) {
+        guard let tabId = activeTab, let wv = webViews[tabId] else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        let limit = min(maxChars, 12000)
+        let js = "document.body.innerText.substring(0, \(limit))"
+        wv.evaluateJavaScript(js) { result, error in
+            DispatchQueue.main.async {
+                if error != nil {
+                    completion(nil)
+                    return
+                }
+                if let text = result as? String, !text.isEmpty {
+                    completion(text)
+                } else {
+                    completion(nil)
+                }
+            }
+        }
+    }
+
     /// Removes a tab's WebView when the tab is closed.
     func removeWebView(for tabId: UUID) {
         webViews.removeValue(forKey: tabId)

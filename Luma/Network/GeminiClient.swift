@@ -83,9 +83,14 @@ final class GeminiClient {
             "role": "user",
             "parts": [["text": prompt]]
         ])
-        
-        let requestBody: [String: Any] = [
+
+        let systemInstruction = "Respond in plain text only. Do not use markdown formatting such as **bold**, *italic*, or # headers. Use normal lettering.Rememeber to be concise. responses should be no longer that 400 charachters unless the user asks for a deeper explaantion"
+
+        var requestBody: [String: Any] = [
             "contents": contents
+        ]
+        requestBody["systemInstruction"] = [
+            "parts": [["text": systemInstruction]]
         ]
         
         guard let jsonData = try? JSONSerialization.data(withJSONObject: requestBody) else {
