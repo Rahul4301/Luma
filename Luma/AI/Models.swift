@@ -22,3 +22,15 @@ struct LLMResponse: Codable {
     let text: String
     let action: BrowserAction?
 }
+
+/// A single message in the chat history.
+struct ChatMessage: Identifiable {
+    let id = UUID()
+    let role: Role
+    let text: String
+
+    enum Role {
+        case user
+        case assistant
+    }
+}

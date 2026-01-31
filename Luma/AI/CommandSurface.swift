@@ -3,137 +3,161 @@ import Foundation
 import SwiftUI
 import AppKit
 
-/// Right-side AI command panel (Cmd+E toggle).
+/// Right-side AI command panel (Cmd+E toggle). Per-tab chat with history.
 ///
 /// Per SRS F2: Toggled via Cmd+E, dockable and dismissible.
 /// Per AGENTS.md: AI is user-invoked only; no background activity.
 /// Per SECURITY.md: UI must display what will be sent and require confirmation.
-///
-/// This view never executes actions directly. It proposes actions via onActionProposed callback.
 struct CommandSurfaceView: View {
     @Binding var isPresented: Bool
+    @Binding var messages: [ChatMessage]
     let webViewWrapper: WebViewWrapper
     let commandRouter: CommandRouter
     let gemini: GeminiClient
     let onActionProposed: (LLMResponse) -> Void
 
     @State private var inputText: String = ""
-    @State private var responseText: String = ""
     @State private var sendContext: Bool = false
     @State private var selectedText: String? = nil
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
     @State private var actionProposedMessage: String? = nil
 
+    private let darkBg = Color(red: 0.08, green: 0.08, blue: 0.1)
+    private let darkBgSecondary = Color(red: 0.12, green: 0.12, blue: 0.15)
+    private let accent = Color(red: 0.4, green: 0.6, blue: 1.0)
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header with close button
+            // Header
             HStack {
-                Text("AI Command")
-                    .font(.headline)
+                Text("AI")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
                 Spacer()
                 Button(action: close) {
                     Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
             }
-            .padding()
-
-            Divider()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(darkBgSecondary)
 
             // AI Status row
             aiStatusRow()
 
-            Divider()
-
-            ScrollView {
-                VStack(spacing: 16) {
-                
-                    // Context indicator
-                    if sendContext {
-                        HStack {
-                            Image(systemName: "info.circle")
-                                .foregroundColor(.blue)
-                            Text("Will send selected text")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-                        .padding(.vertical, 4)
-                    }
-
-                    // Input field
-                    TextField("Enter your command...", text: $inputText, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .lineLimit(3...6)
-
-                    // Include selection toggle
-                    Toggle("Include selection", isOn: $sendContext)
-                        .onChange(of: sendContext) { _, newValue in
-                            if newValue {
-                                fetchSelectedText()
-                            } else {
-                                selectedText = nil
-                                errorMessage = nil
-                            }
-                        }
-
-                    // Show selected text preview if available
-                    if let selectedText = selectedText, sendContext {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Selected text:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(selectedText)
-                                .font(.caption)
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.gray.opacity(0.1))
-                                .cornerRadius(4)
+            // Chat history
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(messages) { msg in
+                            ChatBubble(message: msg, isUser: msg.role == .user)
                         }
                     }
-
-                    // Error message
-                    if let errorMessage = errorMessage {
-                        Text(errorMessage)
-                            .font(.caption)
-                            .foregroundColor(.red)
+                    .padding()
+                }
+                .frame(maxHeight: .infinity)
+                .background(darkBg)
+                .onChange(of: messages.count) { _, _ in
+                    if let last = messages.last {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
                     }
+                }
+            }
 
-                    // Action proposed message
-                    if let message = actionProposedMessage {
-                        Text(message)
-                            .font(.caption)
-                            .foregroundColor(.green)
+            // Input area
+            VStack(spacing: 8) {
+                if sendContext, let selectedText = selectedText, !selectedText.isEmpty {
+                    HStack {
+                        Text("Including selection")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                        Spacer()
                     }
+                }
 
-                    // Response text
-                    if !responseText.isEmpty {
-                        Text(responseText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(4)
-                    }
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField("Message...", text: $inputText)
+                        .textFieldStyle(.plain)
+                        .padding(10)
+                        .background(darkBgSecondary)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                        .onSubmit { sendIfEnter() }
 
-                    // Send button
                     Button(action: sendCommand) {
-                        HStack {
-                            if isSending {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            }
-                            Text("Send")
-                        }
-                        .frame(maxWidth: .infinity)
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(inputText.isEmpty ? .white.opacity(0.3) : accent)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
                     .disabled(inputText.isEmpty || isSending)
                 }
-                .padding()
+
+                HStack {
+                    Toggle(isOn: $sendContext) {
+                        Text("Include selection")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .toggleStyle(.checkbox)
+                    .onChange(of: sendContext) { _, newValue in
+                        if newValue { fetchSelectedText() }
+                        else { selectedText = nil; errorMessage = nil }
+                    }
+
+                    if let msg = actionProposedMessage {
+                        Text(msg)
+                            .font(.caption2)
+                            .foregroundColor(.green.opacity(0.9))
+                    }
+
+                    if let err = errorMessage {
+                        Text(err)
+                            .font(.caption2)
+                            .foregroundColor(.red.opacity(0.9))
+                            .lineLimit(2)
+                    }
+
+                    Spacer()
+                }
+            }
+            .padding(12)
+            .background(darkBgSecondary)
+        }
+        .background(darkBg)
+        .foregroundColor(.white)
+    }
+
+    private func sendIfEnter() {
+        if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sendCommand()
+        }
+    }
+
+    private struct ChatBubble: View {
+        let message: ChatMessage
+        let isUser: Bool
+
+        var body: some View {
+            HStack {
+                if isUser { Spacer(minLength: 40) }
+                Text(message.text)
+                    .font(.system(size: 13))
+                    .foregroundColor(isUser ? .white : .white.opacity(0.95))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(isUser ? Color(red: 0.25, green: 0.4, blue: 0.7) : Color(red: 0.18, green: 0.18, blue: 0.22))
+                    .cornerRadius(12)
+                if !isUser { Spacer(minLength: 40) }
             }
         }
-        .frame(maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -141,64 +165,47 @@ struct CommandSurfaceView: View {
         if let err = GeminiClient.lastNetworkError {
             HStack {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
-                Text("AI Status: Error — \(err)")
-                    .font(.caption)
-                    .foregroundColor(.red)
+                    .foregroundColor(.red.opacity(0.9))
+                Text("Error — \(err)")
+                    .font(.caption2)
+                    .foregroundColor(.red.opacity(0.9))
                     .lineLimit(2)
                 Spacer()
-                SettingsLink {
-                        Text("Troubleshoot")
-                    }
+                SettingsLink { Text("Troubleshoot").font(.caption2) }
                     .buttonStyle(.bordered)
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color.red.opacity(0.08))
+            .background(Color.red.opacity(0.15))
         } else if KeychainManager.shared.fetchGeminiKey() == nil {
             HStack {
                 Image(systemName: "key.fill")
-                    .foregroundColor(.orange)
-                Text("AI Status: No API Key — open Settings")
-                    .font(.caption)
-                    .foregroundColor(.orange)
+                    .foregroundColor(.orange.opacity(0.9))
+                Text("No API Key")
+                    .font(.caption2)
+                    .foregroundColor(.orange.opacity(0.9))
                 Spacer()
-                SettingsLink {
-                        Text("Settings")
-                    }
+                SettingsLink { Text("Settings").font(.caption2) }
                     .buttonStyle(.bordered)
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color.orange.opacity(0.08))
-        } else {
-            HStack {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                Text("AI Status: Ready")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
+            .background(Color.orange.opacity(0.15))
         }
     }
-
 
     private func close() {
         isPresented = false
         inputText = ""
-        responseText = ""
         sendContext = false
         selectedText = nil
         errorMessage = nil
         isSending = false
         actionProposedMessage = nil
     }
-    
+
     private func fetchSelectedText() {
-        webViewWrapper.evaluateSelectedText { [self] text in
+        webViewWrapper.evaluateSelectedText { text in
             if let text = text, !text.isEmpty {
                 selectedText = text
                 errorMessage = nil
@@ -208,24 +215,27 @@ struct CommandSurfaceView: View {
             }
         }
     }
-    
+
     private func sendCommand() {
-        guard !inputText.isEmpty else { return }
-        
+        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
         isSending = true
         errorMessage = nil
-        responseText = ""
-        
-        // Get context if toggle is on
+        actionProposedMessage = nil
+
+        let userMsg = ChatMessage(role: .user, text: trimmed)
+        messages.append(userMsg)
+        inputText = ""
+
         let context: String?
         if sendContext {
             if let selected = selectedText, !selected.isEmpty {
                 context = selected
             } else {
-                // Try to fetch again
-                webViewWrapper.evaluateSelectedText { [self] text in
+                webViewWrapper.evaluateSelectedText { text in
                     if let text = text, !text.isEmpty {
-                        proceedWithSend(context: text)
+                        proceedWithSend(prompt: trimmed, context: text)
                     } else {
                         DispatchQueue.main.async {
                             errorMessage = "No selection"
@@ -238,45 +248,37 @@ struct CommandSurfaceView: View {
         } else {
             context = nil
         }
-        
-        proceedWithSend(context: context)
+
+        proceedWithSend(prompt: trimmed, context: context)
     }
-    
-    private func proceedWithSend(context: String?) {
-        // Per AGENTS.md: Display what will be sent
-        let promptToSend = inputText
+
+    private func proceedWithSend(prompt: String, context: String?) {
+        let promptToSend = prompt
         let contextToSend = context
-        
+
         gemini.generate(prompt: promptToSend, context: contextToSend) { result in
             DispatchQueue.main.async {
                 isSending = false
-                
+
                 switch result {
                 case .success(let data):
-                    // Decode LLMResponse
-                    let decoder = JSONDecoder()
-                    if let response = try? decoder.decode(LLMResponse.self, from: data) {
-                        responseText = response.text
-                        
-                        // If action is present, propose it (do not execute here)
+                    if let response = try? JSONDecoder().decode(LLMResponse.self, from: data) {
+                        messages.append(ChatMessage(role: .assistant, text: response.text))
                         if response.action != nil {
                             onActionProposed(response)
                             actionProposedMessage = "Action proposed"
-                        } else {
-                            actionProposedMessage = nil
                         }
                     } else {
                         errorMessage = "Failed to parse response"
                     }
-                    
+
                 case .failure(let error):
                     let msg = error.localizedDescription
                     errorMessage = msg
-                    responseText = "Error: \(msg)"
+                    messages.append(ChatMessage(role: .assistant, text: "Error: \(msg)"))
                     actionProposedMessage = nil
                 }
             }
         }
     }
-    
 }

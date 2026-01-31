@@ -13,7 +13,8 @@ struct BrowserShellView: View {
     @StateObject private var tabManager = TabManager()
     @StateObject private var web = WebViewWrapper()
     @State private var addressBarText: String = ""
-    @State private var isCommandPanelPresented: Bool = false
+    @State private var tabsWithPanelOpen: Set<UUID> = []
+    @State private var tabChatHistory: [UUID: [ChatMessage]] = [:]
     @State private var eventMonitor: Any?
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
@@ -92,9 +93,16 @@ struct BrowserShellView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if isCommandPanelPresented {
+            if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
                 CommandSurfaceView(
-                    isPresented: $isCommandPanelPresented,
+                    isPresented: Binding(
+                        get: { tabsWithPanelOpen.contains(currentId) },
+                        set: { if !$0 { tabsWithPanelOpen.remove(currentId) } }
+                    ),
+                    messages: Binding(
+                        get: { tabChatHistory[currentId] ?? [] },
+                        set: { tabChatHistory[currentId] = $0 }
+                    ),
                     webViewWrapper: web,
                     commandRouter: router,
                     gemini: gemini
@@ -104,8 +112,8 @@ struct BrowserShellView: View {
                     showActionConfirm = (response.action != nil)
                 }
                 .frame(width: 360)
-                .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
-                .shadow(color: .black.opacity(0.2), radius: 8, x: -2, y: 0)
+                .background(Color(red: 0.08, green: 0.08, blue: 0.1))
+                .shadow(color: .black.opacity(0.3), radius: 8, x: -2, y: 0)
             }
         }
         .alert("Confirm Action", isPresented: $showActionConfirm) {
@@ -131,7 +139,14 @@ struct BrowserShellView: View {
             }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "e" {
-                    DispatchQueue.main.async { isCommandPanelPresented.toggle() }
+                    DispatchQueue.main.async {
+                        guard let id = tabManager.currentTab else { return }
+                        if tabsWithPanelOpen.contains(id) {
+                            tabsWithPanelOpen.remove(id)
+                        } else {
+                            tabsWithPanelOpen.insert(id)
+                        }
+                    }
                     return nil
                 }
                 return event
@@ -216,6 +231,8 @@ struct BrowserShellView: View {
 
     private func closeTab(_ id: UUID) {
         web.removeWebView(for: id)
+        tabsWithPanelOpen.remove(id)
+        tabChatHistory.removeValue(forKey: id)
         tabManager.closeTab(id)
         if tabManager.currentTab == nil {
             newTab()
