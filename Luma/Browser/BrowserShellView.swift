@@ -15,137 +15,188 @@ struct BrowserShellView: View {
     @State private var addressBarText: String = ""
     @State private var tabsWithPanelOpen: Set<UUID> = []
     @State private var tabChatHistory: [UUID: [ChatMessage]] = [:]
-    @State private var aiPanelWidth: CGFloat = 360
+    @State private var aiPanelWidth: CGFloat = 380
     @State private var eventMonitor: Any?
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
     @State private var showHistorySheet: Bool = false
     @State private var restoreAddressBarOnEscape: Bool = false
+    @State private var isFirstLoad: Bool = true
     @FocusState private var addressBarFocused: Bool
 
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
 
-    private let tabRowHeight: CGFloat = 36
-    private let addressBarHeight: CGFloat = 40
+    private let tabRowHeight: CGFloat = 26
+    private let addressBarHeight: CGFloat = 30
+    private let chromeCornerRadius: CGFloat = 14
+    private let chromePadding: CGFloat = 6
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                // Row 1: Tab strip (full width, directly on top)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
-                            TabPill(
-                                tabId: tabId,
-                                index: index + 1,
-                                url: tabManager.tabURL[tabId] ?? nil,
-                                isActive: tabManager.currentTab == tabId,
-                                onSelect: { switchToTab(tabId) },
-                                onClose: { closeTab(tabId) }
-                            )
-                            .id(tabId)
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+                .ignoresSafeArea()
+
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    // Single top chrome (glass): tabs + omnibox
+                    VStack(spacing: 0) {
+                        // Tab strip
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
+                                    TabPill(
+                                        tabId: tabId,
+                                        index: index + 1,
+                                        url: tabManager.tabURL[tabId] ?? nil,
+                                        isActive: tabManager.currentTab == tabId,
+                                        onSelect: { switchToTab(tabId) },
+                                        onClose: { closeTab(tabId) }
+                                    )
+                                    .id(tabId)
+                                }
+                            }
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 4)
                         }
+                        .frame(height: tabRowHeight)
+                        .frame(maxWidth: .infinity)
+
+                        // Address bar row
+                        HStack(spacing: 8) {
+                            Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Back")
+
+                            Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Forward")
+
+                            Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Reload")
+
+                            // Omnibox (glass pill)
+                            HStack(spacing: 6) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                TextField("Search or enter website", text: $addressBarText)
+                                    .textFieldStyle(.plain)
+                                    .focused($addressBarFocused)
+                                    .onSubmit { navigateFromAddressBar() }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(.ultraThinMaterial)
+                                    .opacity(addressBarFocused ? 0.95 : 0.85)
+                            )
+                            .animation(.easeInOut(duration: 0.18), value: addressBarFocused)
+
+                            Button(action: toggleAIPanel) {
+                                Text("AI")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .accessibilityLabel("Toggle AI panel")
+
+                            Button(action: newTab) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("New tab")
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .frame(height: addressBarHeight)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .padding(chromePadding)
+                    .background(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
+
+                    HairlineDivider(opacity: 0.15)
+
+                    // Web content or start page
+                    if let currentId = tabManager.currentTab {
+                        let tabHasURL = (tabManager.tabURL[currentId] ?? nil) != nil
+                        if !tabHasURL {
+                            StartPageView(
+                                entries: tabManager.navigationHistory,
+                                onSelect: { url in
+                                    _ = web.ensureWebView(for: currentId)
+                                    web.setActiveTab(currentId)
+                                    web.load(url: url, in: currentId)
+                                    tabManager.navigate(tab: currentId, to: url)
+                                    tabManager.addNavigation(title: url.host ?? url.absoluteString, url: url)
+                                    addressBarText = url.absoluteString
+                                    isFirstLoad = true
+                                },
+                                onOpenHistory: { showHistorySheet = true }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            ZStack {
+                                WebViewContainer(webView: web.ensureWebView(for: currentId))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .id(currentId)
+                                if isFirstLoad {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    } else {
+                        Color(nsColor: .windowBackgroundColor)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay(Text("No tab").foregroundColor(.secondary))
+                    }
                 }
-                .frame(height: tabRowHeight)
-                .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.easeInOut(duration: 0.18), value: tabManager.currentTab)
 
-                // Row 2: Address bar (full width below tabs)
-                HStack(spacing: 6) {
-                    Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .medium))
+                if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
+                    HStack(spacing: 0) {
+                        PanelResizeHandle(panelWidth: $aiPanelWidth)
+
+                        CommandSurfaceView(
+                            isPresented: Binding(
+                                get: { tabsWithPanelOpen.contains(currentId) },
+                                set: { if !$0 { tabsWithPanelOpen.remove(currentId) } }
+                            ),
+                            messages: Binding(
+                                get: { tabChatHistory[currentId] ?? [] },
+                                set: { tabChatHistory[currentId] = $0 }
+                            ),
+                            webViewWrapper: web,
+                            commandRouter: router,
+                            gemini: gemini
+                        ) { response in
+                            pendingAssistantText = response.text
+                            pendingAction = response.action
+                            showActionConfirm = (response.action != nil)
+                        }
+                        .frame(width: aiPanelWidth)
+                        .background(GlassBackground(material: .hudWindow, cornerRadius: 16, padding: 0, shadowOpacity: 0.08))
+                        .shadow(color: .black.opacity(0.12), radius: 12, x: -4, y: 0)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Back")
-
-                    Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Forward")
-
-                    Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Reload")
-
-                    TextField("Search or enter URL", text: $addressBarText)
-                        .textFieldStyle(.plain)
-                        .focused($addressBarFocused)
-                        .onSubmit { navigateFromAddressBar() }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
-                        .cornerRadius(6)
-
-                    Button(action: toggleAIPanel) {
-                        Text("AI")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .accessibilityLabel("Toggle AI panel")
-
-                    Button(action: newTab) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("New tab")
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .frame(height: addressBarHeight)
-                .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial)
-
-                // Main content (flush under chrome)
-                if let currentId = tabManager.currentTab {
-                    WebViewContainer(webView: web.ensureWebView(for: currentId))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .id(currentId)
-                } else {
-                    Color(nsColor: .windowBackgroundColor)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .overlay(Text("No tab").foregroundColor(.secondary))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
-                HStack(spacing: 0) {
-                    // Resize handle (drag left edge to resize panel)
-                    PanelResizeHandle(panelWidth: $aiPanelWidth)
-
-                    CommandSurfaceView(
-                        isPresented: Binding(
-                            get: { tabsWithPanelOpen.contains(currentId) },
-                            set: { if !$0 { tabsWithPanelOpen.remove(currentId) } }
-                        ),
-                        messages: Binding(
-                            get: { tabChatHistory[currentId] ?? [] },
-                            set: { tabChatHistory[currentId] = $0 }
-                        ),
-                        webViewWrapper: web,
-                        commandRouter: router,
-                        gemini: gemini
-                    ) { response in
-                        pendingAssistantText = response.text
-                        pendingAction = response.action
-                        showActionConfirm = (response.action != nil)
-                    }
-                    .frame(width: aiPanelWidth)
-                    .background(Color(red: 0.08, green: 0.08, blue: 0.1))
-                    .shadow(color: .black.opacity(0.3), radius: 8, x: -2, y: 0)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    .animation(.easeInOut(duration: 0.18), value: tabsWithPanelOpen.contains(currentId))
                 }
             }
         }
@@ -178,13 +229,11 @@ struct BrowserShellView: View {
         }
         .onAppear {
             if tabManager.currentTab == nil {
-                let url = URL(string: "https://example.com")!
-                let id = tabManager.newTab(url: url)
-                _ = web.ensureWebView(for: id)
-                web.setActiveTab(id)
-                web.load(url: url, in: id)
-                tabManager.addNavigation(title: url.host ?? url.absoluteString, url: url)
-                addressBarText = url.absoluteString
+                _ = tabManager.newTab(url: nil)
+                if let id = tabManager.currentTab {
+                    web.setActiveTab(id)
+                    addressBarText = ""
+                }
             }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 let key = event.charactersIgnoringModifiers ?? ""
@@ -235,6 +284,7 @@ struct BrowserShellView: View {
         }
         .onChange(of: web.currentURL) { _, _ in
             syncAddressBarFromCurrentTab()
+            if web.currentURL != nil { isFirstLoad = false }
         }
         .onChange(of: restoreAddressBarOnEscape) { _, new in
             if new {
@@ -381,6 +431,146 @@ struct BrowserShellView: View {
     }
 }
 
+// MARK: - Start page (new tab / no URL)
+
+private struct StartPageView: View {
+    let entries: [HistoryEntry]
+    let onSelect: (URL) -> Void
+    let onOpenHistory: () -> Void
+
+    private static let suggested: [(String, String)] = [
+        ("Google", "https://www.google.com"),
+        ("Wikipedia", "https://www.wikipedia.org"),
+        ("GitHub", "https://github.com"),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Start")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(.primary)
+
+                Text("Type a URL or search in the bar above.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+
+                if !entries.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Recent")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("All history", action: onOpenHistory)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(entries.prefix(12)) { entry in
+                                Button {
+                                    onSelect(entry.url)
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "globe")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 20, alignment: .center)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(entry.title)
+                                                .font(.system(size: 13, weight: .medium))
+                                                .lineLimit(1)
+                                            Text(entry.url.absoluteString)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        Spacer()
+                                        Image(systemName: "arrow.right")
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Quick links")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    FlowLayout(spacing: 8) {
+                        ForEach(Self.suggested, id: \.1) { title, urlString in
+                            if let url = URL(string: urlString) {
+                                Button {
+                                    onSelect(url)
+                                } label: {
+                                    Text(title)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(.ultraThinMaterial)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+/// Simple flow layout for quick-link buttons.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        for (i, frame) in result.frames.enumerated() {
+            subviews[i].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        let maxWidth = proposal.width ?? 400
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var frames: [CGRect] = []
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+        let totalHeight = y + rowHeight
+        return (CGSize(width: maxWidth, height: totalHeight), frames)
+    }
+}
+
 // MARK: - History sheet (Cmd+Y)
 
 private struct HistoryView: View {
@@ -496,20 +686,20 @@ private struct TabPill: View {
                 Text(title)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12, weight: .medium))
                     .frame(maxWidth: 140)
             }
             .buttonStyle(.plain)
-            .padding(.leading, 8)
-            .padding(.trailing, isHovered ? 4 : 8)
-            .padding(.vertical, 6)
+            .padding(.leading, 6)
+            .padding(.trailing, isHovered ? 3 : 6)
+            .padding(.vertical, 4)
 
-            if isHovered {
+            if isHovered || isActive {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 8, weight: .semibold))
                         .foregroundColor(.secondary)
-                        .frame(width: 16, height: 16)
+                        .frame(width: 14, height: 14)
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 6)
@@ -518,16 +708,17 @@ private struct TabPill: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isActive ? Color.accentColor.opacity(0.25) : (isHovered ? Color.primary.opacity(0.06) : Color.clear))
+                .fill(.ultraThinMaterial)
+                .opacity(isActive ? 0.9 : (isHovered ? 0.6 : 0.4))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(isActive ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+                .stroke(isActive ? Color.accentColor.opacity(0.25) : Color.clear, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(isActive ? 0.06 : 0), radius: 2, y: 1)
-        .scaleEffect(isHovered && !isActive ? 1.02 : 1.0)
-        .animation(.easeOut(duration: 0.15), value: isHovered)
-        .animation(.easeOut(duration: 0.15), value: isActive)
+        .shadow(color: .black.opacity(isActive ? 0.04 : 0), radius: 1, y: 0)
+        .scaleEffect(isHovered && !isActive ? 1.01 : 1.0)
+        .animation(.easeInOut(duration: 0.18), value: isHovered)
+        .animation(.easeInOut(duration: 0.18), value: isActive)
         .onHover { hovering in
             isHovered = hovering
         }

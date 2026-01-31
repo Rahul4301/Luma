@@ -20,6 +20,9 @@ struct CommandSurfaceView: View {
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
     @State private var actionProposedMessage: String? = nil
+    @State private var includeSelection: Bool = false
+    @State private var selectedText: String? = nil
+    @State private var whatWillBeSentExpanded: Bool = false
 
     // Auto-loaded page context
     @State private var pageTitle: String? = nil
@@ -27,102 +30,120 @@ struct CommandSurfaceView: View {
     @State private var isLoadingContext: Bool = false
     @State private var contextRefreshTimer: Timer? = nil
 
-    private let darkBg = Color(red: 0.08, green: 0.08, blue: 0.1)
-    private let darkBgSecondary = Color(red: 0.12, green: 0.12, blue: 0.15)
-    private let accent = Color(red: 0.4, green: 0.6, blue: 1.0)
+    private let accent = Color.accentColor
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("AI")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
+            // Header: Luma + status dot + optional Settings + close (small, calm)
+            HStack(spacing: 8) {
+                Text("Luma")
+                    .font(.system(size: 13, weight: .semibold))
+                statusDotView()
+                if KeychainManager.shared.fetchGeminiKey() == nil || GeminiClient.lastNetworkError != nil {
+                    SettingsLink { Text("Settings").font(.caption2).foregroundStyle(.secondary) }
+                        .buttonStyle(.plain)
+                }
                 Spacer()
                 Button(action: close) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(darkBgSecondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
 
-            // AI Status row
-            aiStatusRow()
+            // Collapsible "What will be sent" (off by default)
+            DisclosureGroup(isExpanded: $whatWillBeSentExpanded) {
+                contextPreviewContent()
+                    .font(.system(size: 11))
+                    .padding(.top, 4)
+            } label: {
+                Text("What will be sent")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial.opacity(0.6))
 
-            // Page context preview (shows what will be sent)
-            contextPreviewRow()
-
-            // Chat history
+            // Chat history (scrollable, smaller font)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(messages) { msg in
                             ChatBubble(message: msg, isUser: msg.role == .user)
                         }
                     }
-                    .padding()
+                    .padding(12)
                 }
                 .frame(maxHeight: .infinity)
-                .background(darkBg)
                 .onChange(of: messages.count) { _, _ in
                     if let last = messages.last {
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        withAnimation(.easeOut(duration: 0.18)) {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
                     }
                 }
             }
 
-            // Input area
-            VStack(spacing: 8) {
+            // Input area: small multi-line (up to 4 lines) + paper plane + toggles
+            VStack(spacing: 6) {
                 HStack(alignment: .bottom, spacing: 8) {
                     GrowingTextEditor(
                         text: $inputText,
                         placeholder: "Message...",
-                        minHeight: 36
+                        minHeight: 32
                     )
                     .padding(8)
-                    .background(darkBgSecondary)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
+                    .frame(maxHeight: 80)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
 
                     Button(action: sendCommand) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 28))
-                            .foregroundColor(inputText.isEmpty ? .white.opacity(0.3) : accent)
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(inputText.isEmpty ? .secondary.opacity(0.5) : accent)
                     }
                     .buttonStyle(.plain)
                     .disabled(inputText.isEmpty || isSending)
                     .keyboardShortcut(.return, modifiers: .command)
+                    .help("Send (⌘↵)")
                 }
 
-                HStack {
+                HStack(spacing: 12) {
+                    Toggle(isOn: $includeSelection) {
+                        Text("Include selection")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .toggleStyle(.checkbox)
+                    .onChange(of: includeSelection) { _, on in
+                        if on { fetchSelectedText() }
+                        else { selectedText = nil }
+                    }
+
                     if let msg = actionProposedMessage {
                         Text(msg)
                             .font(.caption2)
-                            .foregroundColor(.green.opacity(0.9))
+                            .foregroundStyle(.secondary)
                     }
-
                     if let err = errorMessage {
                         Text(err)
                             .font(.caption2)
-                            .foregroundColor(.red.opacity(0.9))
-                            .lineLimit(2)
+                            .foregroundColor(.red)
+                            .lineLimit(1)
                     }
-
-                    Spacer()
+                    Spacer(minLength: 0)
                 }
             }
             .padding(12)
-            .background(darkBgSecondary)
+            .background(.ultraThinMaterial)
         }
-        .background(darkBg)
-        .foregroundColor(.white)
+        .background(.regularMaterial)
         .onAppear {
             loadPageContext()
             startContextRefreshTimer()
@@ -130,6 +151,24 @@ struct CommandSurfaceView: View {
         .onDisappear {
             stopContextRefreshTimer()
         }
+    }
+
+    @ViewBuilder
+    private func statusDotView() -> some View {
+        let (color, _) = statusDotState()
+        Circle()
+            .fill(color)
+            .frame(width: 6, height: 6)
+    }
+
+    private func statusDotState() -> (Color, String) {
+        if GeminiClient.lastNetworkError != nil {
+            return (.red, "Error")
+        }
+        if KeychainManager.shared.fetchGeminiKey() == nil {
+            return (.gray, "No key")
+        }
+        return (.green, "Ready")
     }
 
     private func sendIfEnter() {
@@ -144,51 +183,50 @@ struct CommandSurfaceView: View {
 
         var body: some View {
             HStack {
-                if isUser { Spacer(minLength: 40) }
+                if isUser { Spacer(minLength: 32) }
                 Text(message.text)
-                    .font(.system(size: 13))
-                    .foregroundColor(isUser ? .white : .white.opacity(0.95))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(isUser ? Color(red: 0.25, green: 0.4, blue: 0.7) : Color(red: 0.18, green: 0.18, blue: 0.22))
-                    .cornerRadius(12)
-                if !isUser { Spacer(minLength: 40) }
+                    .font(.system(size: 12))
+                    .foregroundColor(isUser ? .white : .primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(isUser ? Color.accentColor : Color.primary.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                if !isUser { Spacer(minLength: 32) }
             }
         }
     }
 
-    @ViewBuilder
-    private func aiStatusRow() -> some View {
-        if let err = GeminiClient.lastNetworkError {
-            HStack {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red.opacity(0.9))
-                Text("Error — \(err)")
-                    .font(.caption2)
-                    .foregroundColor(.red.opacity(0.9))
-                    .lineLimit(2)
-                Spacer()
-                SettingsLink { Text("Troubleshoot").font(.caption2) }
-                    .buttonStyle(.bordered)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.red.opacity(0.15))
-        } else if KeychainManager.shared.fetchGeminiKey() == nil {
-            HStack {
-                Image(systemName: "key.fill")
-                    .foregroundColor(.orange.opacity(0.9))
-                Text("No API Key")
-                    .font(.caption2)
-                    .foregroundColor(.orange.opacity(0.9))
-                Spacer()
-                SettingsLink { Text("Settings").font(.caption2) }
-                    .buttonStyle(.bordered)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.orange.opacity(0.15))
+    private func fetchSelectedText() {
+        webViewWrapper.evaluateSelectedText { text in
+            selectedText = text
         }
+    }
+
+    @ViewBuilder
+    private func contextPreviewContent() -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let url = webViewWrapper.currentURL {
+                Text("URL: \(url.absoluteString)")
+                    .lineLimit(1)
+            }
+            if let title = pageTitle, !title.isEmpty {
+                Text("Title: \(title)")
+                    .lineLimit(1)
+            }
+            if let text = pageText, !text.isEmpty {
+                Text("Page: \(text.prefix(200))\(text.count > 200 ? "…" : "")")
+                    .lineLimit(3)
+            }
+            if includeSelection, let sel = selectedText, !sel.isEmpty {
+                Text("Selection: \(sel.prefix(100))\(sel.count > 100 ? "…" : "")")
+                    .lineLimit(2)
+            }
+            if isLoadingContext {
+                ProgressView()
+                    .scaleEffect(0.6)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func close() {
@@ -236,7 +274,7 @@ struct CommandSurfaceView: View {
         }
     }
 
-    /// Builds context string from page metadata.
+    /// Builds context string from page metadata and optional selection.
     private func buildContextString() -> String? {
         var parts: [String] = []
 
@@ -249,54 +287,14 @@ struct CommandSurfaceView: View {
         }
 
         if let text = pageText, !text.isEmpty {
-            // Truncate for display but send full 4k
             parts.append("Page content:\n\(text)")
         }
 
-        return parts.isEmpty ? nil : parts.joined(separator: "\n")
-    }
-
-    @ViewBuilder
-    private func contextPreviewRow() -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.5))
-                Text("Context")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.5))
-                Spacer()
-                if isLoadingContext {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                }
-            }
-
-            if let url = webViewWrapper.currentURL {
-                Text(url.host ?? url.absoluteString)
-                    .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.7))
-                    .lineLimit(1)
-            }
-
-            if let title = pageTitle, !title.isEmpty {
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.8))
-                    .lineLimit(1)
-            }
-
-            if let text = pageText, !text.isEmpty {
-                Text(text.prefix(150) + (text.count > 150 ? "..." : ""))
-                    .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.5))
-                    .lineLimit(2)
-            }
+        if includeSelection, let sel = selectedText, !sel.isEmpty {
+            parts.append("Selection:\n\(sel)")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.03))
+
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
     private func sendCommand() {
@@ -396,7 +394,7 @@ private struct GrowingTextEditor: View {
             if text.isEmpty {
                 Text(placeholder)
                     .font(font)
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundStyle(.secondary)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .frame(height: boxHeight)
