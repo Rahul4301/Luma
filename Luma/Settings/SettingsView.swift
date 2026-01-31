@@ -3,21 +3,14 @@ import Foundation
 import SwiftUI
 import AppKit
 
-/// Settings view for API key management and authentication.
+/// Settings view for API key management.
 ///
-/// Per SRS F5: Settings UI for AI enable/disable, Gemini API key input, and sign-in.
+/// Per SRS F5: Settings UI for AI enable/disable, Gemini API key input.
 /// Per SECURITY.md: Keys handled via KeychainManager only; UI never stores tokens directly.
-/// Per SECURITY.md: Keys must not be pre-populated in plain text fields.
 struct SettingsView: View {
-    @ObservedObject private var auth = SupabaseAuth.shared
-    
-    // Gemini BYO key state
     @State private var keyInput: String = ""
     @State private var statusText: String = ""
     @State private var hasKey: Bool = false
-    
-    // Auth state
-    @State private var authErrorMessage: String? = nil
     @State private var isProcessing: Bool = false
     
     var body: some View {
@@ -61,52 +54,6 @@ struct SettingsView: View {
                         deleteKey()
                     }
                     .disabled(isProcessing || !hasKey)
-                }
-            }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            
-            Divider()
-            
-            // Authentication Section (stubbed for Supabase)
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Authentication")
-                    .font(.headline)
-                
-                if auth.isSignedIn {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Signed in")
-                            .font(.subheadline)
-                            .foregroundColor(.green)
-                        
-                        if let email = auth.userEmail {
-                            Text("Email: \(email)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Button("Sign Out") {
-                            auth.signOut()
-                        }
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Not signed in")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        
-                        Button("Sign in with Google") {
-                            signInWithGoogle()
-                        }
-                        .disabled(isProcessing)
-                    }
-                }
-                
-                if let errorMessage = authErrorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundColor(.red)
                 }
             }
             .padding()
@@ -163,32 +110,5 @@ struct SettingsView: View {
         }
         
         isProcessing = false
-    }
-    
-    private func signInWithGoogle() {
-        guard let window = NSApplication.shared.windows.first else {
-            authErrorMessage = "No window available"
-            return
-        }
-        
-        isProcessing = true
-        authErrorMessage = nil
-        
-        SupabaseAuth.shared.signInWithGoogle(presentingWindow: window) { result in
-            DispatchQueue.main.async {
-                isProcessing = false
-                
-                switch result {
-                case .success:
-                    authErrorMessage = nil
-                case .failure(let error):
-                    if error is NotConfiguredError {
-                        authErrorMessage = "Authentication not configured. Please configure Supabase settings."
-                    } else {
-                        authErrorMessage = "Error: \(error.localizedDescription)"
-                    }
-                }
-            }
-        }
     }
 }

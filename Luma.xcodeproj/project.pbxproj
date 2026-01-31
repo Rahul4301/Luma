@@ -10,33 +10,9 @@
 		4D7AC0632F2C969300B7321B /* Luma.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Luma.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		4D6EE6AC2F2CBB9A00F86AC5 /* Exceptions for "Luma" folder in "Luma" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				.env,
-			);
-			target = 4D7AC0622F2C969300B7321B /* Luma */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
-/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
-		4D6EE6AD2F2CBB9A00F86AC5 /* Exceptions for "Luma" folder in "Compile Sources" phase from "Luma" target */ = {
-			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
-			buildPhase = 4D7AC05F2F2C969300B7321B /* Sources */;
-			membershipExceptions = (
-				.env,
-			);
-		};
-/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		4D7AC0652F2C969300B7321B /* Luma */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				4D6EE6AC2F2CBB9A00F86AC5 /* Exceptions for "Luma" folder in "Luma" target */,
-				4D6EE6AD2F2CBB9A00F86AC5 /* Exceptions for "Luma" folder in "Compile Sources" phase from "Luma" target */,
-			);
 			path = Luma;
 			sourceTree = "<group>";
 		};
