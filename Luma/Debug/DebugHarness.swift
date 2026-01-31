@@ -148,8 +148,8 @@ final class DebugHarness {
         print("  Current tab: \(tabManager.currentTab?.uuidString ?? "nil")")
         print("  Tab URL: \((tabManager.tabURL[tabId] ?? nil)?.absoluteString ?? "nil")")
         
-        // Load URL in WebViewWrapper
-        webViewWrapper.load(url: exampleURL)
+        webViewWrapper.setActiveTab(tabId)
+        webViewWrapper.load(url: exampleURL, in: tabId)
         print("✓ Loaded URL in WebViewWrapper")
         
         // Test 2: Simulate "Summarize page" with no selection

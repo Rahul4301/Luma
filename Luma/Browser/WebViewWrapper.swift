@@ -4,82 +4,96 @@ import WebKit
 import SwiftUI
 import Combine
 
-
-/// Minimal, safe WKWebView host for Luma browser tabs.
-/// 
-/// Security constraints:
-/// - Selected-text fetching is the only page-to-app extraction allowed; no full HTML dumps.
-/// - Do not expose file system or credentials to web content.
-/// - No JS bridge message handlers in MVP (minimal attack surface).
+/// Manages one WKWebView per tab. Safe configuration, no message handlers.
 final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
+    private var webViews: [UUID: WKWebView] = [:]
+    private(set) var activeTab: UUID?
     @Published var currentURL: URL?
 
-    /// Called when navigation completes; used to sync address bar.
-    var onURLChanged: ((URL?) -> Void)?
-
-    private var webView: WKWebView!
-
-    override init() {
-        super.init()
-        
-        let configuration = WKWebViewConfiguration()
-        // JavaScript is enabled by default for web content.
-        // Do NOT add any userContentController message handlers in MVP (no JS bridge).
-        configuration.websiteDataStore = .default()
-        
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = self
+    func ensureWebView(for tabId: UUID) -> WKWebView {
+        if let wv = webViews[tabId] { return wv }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.navigationDelegate = self
+        webViews[tabId] = wv
+        return wv
     }
-    
-    /// Returns the underlying WKWebView for embedding in SwiftUI views.
-    var view: WKWebView {
-        webView
+
+    func setActiveTab(_ tabId: UUID) {
+        activeTab = tabId
+        currentURL = webViews[tabId]?.url
     }
-    
-    /// Loads the specified URL on the main thread.
-    func load(url: URL) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            let request = URLRequest(url: url)
-            self.webView.load(request)
+
+    func load(url: URL, in tabId: UUID) {
+        let wv = ensureWebView(for: tabId)
+        let request = URLRequest(url: url)
+        wv.load(request)
+        if activeTab == tabId {
+            currentURL = url
         }
     }
-    
-    /// Evaluates selected text from the page using safe JavaScript.
-    /// Returns only the text content (window.getSelection().toString()), not HTML.
-    /// Completion handler runs on main thread.
-    func evaluateSelectedText(completion: @escaping (String?) -> Void) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else {
-                completion(nil)
-                return
-            }
-            
-            // Safe JS snippet: only gets selected text, no HTML or DOM access beyond selection.
-            self.webView.evaluateJavaScript("window.getSelection().toString()") { result, error in
-                DispatchQueue.main.async {
-                    if error != nil {
-                        completion(nil)
-                        return
-                    }
-                    
-                    if let text = result as? String, !text.isEmpty {
-                        completion(text)
-                    } else {
-                        completion(nil)
-                    }
+
+    func goBack(in tabId: UUID) {
+        webViews[tabId]?.goBack()
+    }
+
+    func goForward(in tabId: UUID) {
+        webViews[tabId]?.goForward()
+    }
+
+    func reload(in tabId: UUID) {
+        webViews[tabId]?.reload()
+    }
+
+    func evaluateSelectedText(in tabId: UUID, completion: @escaping (String?) -> Void) {
+        guard let wv = webViews[tabId] else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        wv.evaluateJavaScript("window.getSelection().toString()") { result, error in
+            DispatchQueue.main.async {
+                if error != nil {
+                    completion(nil)
+                    return
+                }
+                if let text = result as? String, !text.isEmpty {
+                    completion(text)
+                } else {
+                    completion(nil)
                 }
             }
         }
     }
-    
+
+    /// Convenience for AI command surface: uses active tab.
+    func evaluateSelectedText(completion: @escaping (String?) -> Void) {
+        guard let tabId = activeTab else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        evaluateSelectedText(in: tabId, completion: completion)
+    }
+
+    /// Removes a tab's WebView when the tab is closed.
+    func removeWebView(for tabId: UUID) {
+        webViews.removeValue(forKey: tabId)
+        if activeTab == tabId {
+            activeTab = nil
+            currentURL = nil
+        }
+    }
+
     // MARK: - WKNavigationDelegate
-    
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.currentURL = webView.url
-            self.onURLChanged?(webView.url)
+            guard self.activeTab != nil else { return }
+            if let tabId = self.webViews.first(where: { $0.value === webView })?.key,
+               tabId == self.activeTab {
+                self.currentURL = webView.url
+            }
         }
     }
 }
