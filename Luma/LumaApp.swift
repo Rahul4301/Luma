@@ -12,8 +12,6 @@ struct LumaApp: App {
         WindowGroup {
             ContentView()
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowToolbarStyle(.unifiedCompact)
         Settings {
             SettingsView()
         }
