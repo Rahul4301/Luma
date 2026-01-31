@@ -15,6 +15,7 @@ struct BrowserShellView: View {
     @State private var addressBarText: String = ""
     @State private var tabsWithPanelOpen: Set<UUID> = []
     @State private var tabChatHistory: [UUID: [ChatMessage]] = [:]
+    @State private var aiPanelWidth: CGFloat = 360
     @State private var eventMonitor: Any?
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
@@ -115,26 +116,31 @@ struct BrowserShellView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
-                CommandSurfaceView(
-                    isPresented: Binding(
-                        get: { tabsWithPanelOpen.contains(currentId) },
-                        set: { if !$0 { tabsWithPanelOpen.remove(currentId) } }
-                    ),
-                    messages: Binding(
-                        get: { tabChatHistory[currentId] ?? [] },
-                        set: { tabChatHistory[currentId] = $0 }
-                    ),
-                    webViewWrapper: web,
-                    commandRouter: router,
-                    gemini: gemini
-                ) { response in
-                    pendingAssistantText = response.text
-                    pendingAction = response.action
-                    showActionConfirm = (response.action != nil)
+                HStack(spacing: 0) {
+                    // Resize handle (drag left edge to resize panel)
+                    PanelResizeHandle(panelWidth: $aiPanelWidth)
+
+                    CommandSurfaceView(
+                        isPresented: Binding(
+                            get: { tabsWithPanelOpen.contains(currentId) },
+                            set: { if !$0 { tabsWithPanelOpen.remove(currentId) } }
+                        ),
+                        messages: Binding(
+                            get: { tabChatHistory[currentId] ?? [] },
+                            set: { tabChatHistory[currentId] = $0 }
+                        ),
+                        webViewWrapper: web,
+                        commandRouter: router,
+                        gemini: gemini
+                    ) { response in
+                        pendingAssistantText = response.text
+                        pendingAction = response.action
+                        showActionConfirm = (response.action != nil)
+                    }
+                    .frame(width: aiPanelWidth)
+                    .background(Color(red: 0.08, green: 0.08, blue: 0.1))
+                    .shadow(color: .black.opacity(0.3), radius: 8, x: -2, y: 0)
                 }
-                .frame(width: 360)
-                .background(Color(red: 0.08, green: 0.08, blue: 0.1))
-                .shadow(color: .black.opacity(0.3), radius: 8, x: -2, y: 0)
             }
         }
         .alert("Confirm Action", isPresented: $showActionConfirm) {
@@ -316,6 +322,41 @@ struct BrowserShellView: View {
         }
 
         pendingAction = nil
+    }
+}
+
+private struct PanelResizeHandle: View {
+    @Binding var panelWidth: CGFloat
+
+    private let minWidth: CGFloat = 280
+    private let maxWidth: CGFloat = 700
+    @State private var dragStartWidth: CGFloat = 0
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 6)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        if dragStartWidth == 0 {
+                            dragStartWidth = panelWidth
+                        }
+                        let newWidth = dragStartWidth - value.translation.width
+                        panelWidth = min(maxWidth, max(minWidth, newWidth))
+                    }
+                    .onEnded { _ in
+                        dragStartWidth = 0
+                    }
+            )
     }
 }
 

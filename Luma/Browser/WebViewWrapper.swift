@@ -10,11 +10,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     private(set) var activeTab: UUID?
     @Published var currentURL: URL?
 
+    /// User-Agent matching current Safari on macOS so Google Workspace / Gmail treat the app as a supported browser.
+    private static let safariLikeUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+
     func ensureWebView(for tabId: UUID) -> WKWebView {
         if let wv = webViews[tabId] { return wv }
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = WebViewWrapper.safariLikeUserAgent
         wv.navigationDelegate = self
         webViews[tabId] = wv
         return wv

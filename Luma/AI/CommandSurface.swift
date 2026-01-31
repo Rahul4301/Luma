@@ -81,13 +81,16 @@ struct CommandSurfaceView: View {
             // Input area
             VStack(spacing: 8) {
                 HStack(alignment: .bottom, spacing: 8) {
-                    TextField("Message...", text: $inputText)
-                        .textFieldStyle(.plain)
-                        .padding(10)
-                        .background(darkBgSecondary)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                        .onSubmit { sendIfEnter() }
+                    GrowingTextEditor(
+                        text: $inputText,
+                        placeholder: "Message...",
+                        minHeight: 44,
+                        maxHeight: 200
+                    )
+                    .padding(8)
+                    .background(darkBgSecondary)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
 
                     Button(action: sendCommand) {
                         Image(systemName: "arrow.up.circle.fill")
@@ -96,6 +99,7 @@ struct CommandSurfaceView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(inputText.isEmpty || isSending)
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
 
                 HStack {
@@ -340,6 +344,61 @@ struct CommandSurfaceView: View {
                     actionProposedMessage = nil
                 }
             }
+        }
+    }
+}
+
+// MARK: - Growing multiline text editor
+
+private struct TextHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct GrowingTextEditor: View {
+    @Binding var text: String
+    var placeholder: String
+    var minHeight: CGFloat
+    var maxHeight: CGFloat
+
+    @State private var editorHeight: CGFloat = 44
+
+    private let font = Font.system(size: 13)
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Invisible text to measure content height (same font as TextEditor)
+            Text(text.isEmpty ? " " : text)
+                .font(font)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(8)
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(key: TextHeightKey.self, value: g.size.height)
+                    }
+                )
+                .allowsHitTesting(false)
+
+            TextEditor(text: $text)
+                .font(font)
+                .scrollContentBackground(.hidden)
+                .padding(4)
+                .frame(minHeight: minHeight, maxHeight: min(maxHeight, max(minHeight, editorHeight)))
+
+            if text.isEmpty {
+                Text(placeholder)
+                    .font(font)
+                    .foregroundColor(.white.opacity(0.4))
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onPreferenceChange(TextHeightKey.self) { h in
+            editorHeight = h
         }
     }
 }
