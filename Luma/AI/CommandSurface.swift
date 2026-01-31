@@ -2,12 +2,12 @@
 import Foundation
 import SwiftUI
 
-/// Floating AI command surface overlay (Cmd+E).
-/// 
-/// Per SRS F2: Toggled via Cmd+E, floating and dismissible.
+/// Right-side AI command panel (Cmd+E toggle).
+///
+/// Per SRS F2: Toggled via Cmd+E, dockable and dismissible.
 /// Per AGENTS.md: AI is user-invoked only; no background activity.
 /// Per SECURITY.md: UI must display what will be sent and require confirmation.
-/// 
+///
 /// This view never executes actions directly. It proposes actions via onActionProposed callback.
 struct CommandSurfaceView: View {
     @Binding var isPresented: Bool
@@ -15,7 +15,7 @@ struct CommandSurfaceView: View {
     let commandRouter: CommandRouter
     let gemini: GeminiClient
     let onActionProposed: (LLMResponse) -> Void
-    
+
     @State private var inputText: String = ""
     @State private var responseText: String = ""
     @State private var sendContext: Bool = false
@@ -23,113 +23,122 @@ struct CommandSurfaceView: View {
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
     @State private var actionProposedMessage: String? = nil
-    
+
     var body: some View {
-        if isPresented {
-            VStack(spacing: 16) {
-                // Header
-                HStack {
-                    Text("AI Command")
-                        .font(.headline)
-                    Spacer()
-                    Button("Cancel") {
-                        cancel()
-                    }
+        VStack(spacing: 0) {
+            // Header with close button
+            HStack {
+                Text("AI Command")
+                    .font(.headline)
+                Spacer()
+                Button(action: close) {
+                    Image(systemName: "xmark")
                 }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.escape, modifiers: [])
+            }
+            .padding()
+
+            Divider()
+
+            ScrollView {
+                VStack(spacing: 16) {
                 
-                // Context indicator
-                if sendContext {
-                    HStack {
-                        Image(systemName: "info.circle")
-                            .foregroundColor(.blue)
-                        Text("Will send selected text")
-                            .font(.caption)
-                            .foregroundColor(.blue)
+                    // Context indicator
+                    if sendContext {
+                        HStack {
+                            Image(systemName: "info.circle")
+                                .foregroundColor(.blue)
+                            Text("Will send selected text")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
-                }
-                
-                // Input field
-                TextField("Enter your command...", text: $inputText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(3...6)
-                
-                // Include selection toggle
-                Toggle("Include selection", isOn: $sendContext)
-                    .onChange(of: sendContext) { _, newValue in
-                        if newValue {
-                            fetchSelectedText()
-                        } else {
-                            selectedText = nil
-                            errorMessage = nil
+
+                    // Input field
+                    TextField("Enter your command...", text: $inputText, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(3...6)
+
+                    // Include selection toggle
+                    Toggle("Include selection", isOn: $sendContext)
+                        .onChange(of: sendContext) { _, newValue in
+                            if newValue {
+                                fetchSelectedText()
+                            } else {
+                                selectedText = nil
+                                errorMessage = nil
+                            }
+                        }
+
+                    // Show selected text preview if available
+                    if let selectedText = selectedText, sendContext {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Selected text:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(selectedText)
+                                .font(.caption)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(4)
                         }
                     }
-                
-                // Show selected text preview if available
-                if let selectedText = selectedText, sendContext {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Selected text:")
+
+                    // Error message
+                    if let errorMessage = errorMessage {
+                        Text(errorMessage)
                             .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(selectedText)
-                            .font(.caption)
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(4)
+                            .foregroundColor(.red)
                     }
-                }
-                
-                // Error message
-                if let errorMessage = errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                }
-                
-                // Action proposed message
-                if let message = actionProposedMessage {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundColor(.green)
-                }
-                
-                // Response text
-                if !responseText.isEmpty {
-                    ScrollView {
+
+                    // Action proposed message
+                    if let message = actionProposedMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+
+                    // Response text
+                    if !responseText.isEmpty {
                         Text(responseText)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding()
                             .background(Color.gray.opacity(0.1))
                             .cornerRadius(4)
                     }
-                    .frame(maxHeight: 200)
-                }
-                
-                // Send button
-                Button(action: sendCommand) {
-                    HStack {
-                        if isSending {
-                            ProgressView()
-                                .scaleEffect(0.8)
+
+                    // Send button
+                    Button(action: sendCommand) {
+                        HStack {
+                            if isSending {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                            Text("Send")
                         }
-                        Text("Send")
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(inputText.isEmpty || isSending)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(inputText.isEmpty || isSending)
-            }
-            .padding()
-            .frame(width: 500)
-            .background(Color(NSColor.windowBackgroundColor))
-            .cornerRadius(12)
-            .shadow(radius: 10)
-            .onAppear {
-                // Focus input field when overlay appears
-                // Note: Focus management may require additional setup
+                .padding()
             }
         }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func close() {
+        isPresented = false
+        inputText = ""
+        responseText = ""
+        sendContext = false
+        selectedText = nil
+        errorMessage = nil
+        isSending = false
+        actionProposedMessage = nil
     }
     
     private func fetchSelectedText() {
@@ -211,14 +220,4 @@ struct CommandSurfaceView: View {
         }
     }
     
-    private func cancel() {
-        isPresented = false
-        inputText = ""
-        responseText = ""
-        sendContext = false
-        selectedText = nil
-        errorMessage = nil
-        isSending = false
-        actionProposedMessage = nil
-    }
 }

@@ -13,7 +13,7 @@ struct BrowserShellView: View {
     @StateObject private var tabManager = TabManager()
     @StateObject private var web = WebViewWrapper()
     @State private var addressBarText: String = ""
-    @State private var isCommandSurfacePresented: Bool = false
+    @State private var isCommandPanelPresented: Bool = false
     @State private var eventMonitor: Any?
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
@@ -24,7 +24,7 @@ struct BrowserShellView: View {
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
 
     var body: some View {
-        ZStack {
+        HStack(spacing: 0) {
             VStack(spacing: 0) {
                 // Top bar: Back, Forward, Reload, Address bar, Go, New Tab, Close Tab
                 HStack(spacing: 8) {
@@ -90,29 +90,22 @@ struct BrowserShellView: View {
                         .overlay(Text("No tab").foregroundColor(.secondary))
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if isCommandSurfacePresented {
-                Color.black.opacity(0.25).ignoresSafeArea()
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button("Close") { toggleCommandSurface() }
-                            .keyboardShortcut(.escape, modifiers: [])
-                    }
-                    .padding(.horizontal)
-
-                    CommandSurfaceView(
-                        isPresented: $isCommandSurfacePresented,
-                        webViewWrapper: web,
-                        commandRouter: router,
-                        gemini: gemini
-                    ) { response in
-                        pendingAssistantText = response.text
-                        pendingAction = response.action
-                        showActionConfirm = (response.action != nil)
-                    }
+            if isCommandPanelPresented {
+                CommandSurfaceView(
+                    isPresented: $isCommandPanelPresented,
+                    webViewWrapper: web,
+                    commandRouter: router,
+                    gemini: gemini
+                ) { response in
+                    pendingAssistantText = response.text
+                    pendingAction = response.action
+                    showActionConfirm = (response.action != nil)
                 }
-                .padding(.top, 40)
+                .frame(width: 360)
+                .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
+                .shadow(color: .black.opacity(0.2), radius: 8, x: -2, y: 0)
             }
         }
         .alert("Confirm Action", isPresented: $showActionConfirm) {
@@ -138,7 +131,7 @@ struct BrowserShellView: View {
             }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "e" {
-                    DispatchQueue.main.async { toggleCommandSurface() }
+                    DispatchQueue.main.async { isCommandPanelPresented.toggle() }
                     return nil
                 }
                 return event
@@ -238,9 +231,6 @@ struct BrowserShellView: View {
         syncAddressBarFromCurrentTab()
     }
 
-    private func toggleCommandSurface() {
-        isCommandSurfacePresented.toggle()
-    }
 
     private func executePendingAction() {
         guard let action = pendingAction else { return }
