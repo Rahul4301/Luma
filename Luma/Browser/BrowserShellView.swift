@@ -39,8 +39,25 @@ struct BrowserShellView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    // Address bar row (Chrome-style omnibox)
-                    HStack(spacing: 6) {
+                    // Chrome: tabs + address bar (in content area so tab clicks work — toolbar has hit-testing issues on macOS)
+                    VStack(spacing: 0) {
+                        TabStripView(
+                            tabManager: tabManager,
+                            contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
+                                ? Color(white: 0.13)
+                                : Color(nsColor: .windowBackgroundColor),
+                            onSwitch: { switchToTab($0) },
+                            onClose: { closeTab($0) },
+                            onNewTab: newTab
+                        )
+                        .padding(.leading, 8)
+                        .padding(.trailing, chromePadding)
+                        .padding(.top, 6)
+                        .padding(.bottom, 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        // Address bar row (Chrome-style omnibox)
+                        HStack(spacing: 6) {
                         // Nav buttons (rounded)
                         HStack(spacing: 2) {
                             Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
@@ -116,12 +133,14 @@ struct BrowserShellView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Toggle AI panel")
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .frame(height: addressBarHeight)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, chromePadding)
+                        .padding(.bottom, chromePadding)
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .frame(height: addressBarHeight)
-                    .frame(maxWidth: .infinity)
-                    .padding(chromePadding)
                     .background(
                         tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
                             ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
@@ -202,21 +221,6 @@ struct BrowserShellView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                TabStripView(
-                    tabManager: tabManager,
-                    contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
-                        ? Color(white: 0.13)
-                        : Color(nsColor: .windowBackgroundColor),
-                    onSwitch: { switchToTab($0) },
-                    onClose: { closeTab($0) },
-                    onNewTab: newTab
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .toolbarBackground(.visible, for: .windowToolbar)
         .alert("Confirm Action", isPresented: $showActionConfirm) {
             Button("Cancel", role: .cancel) { pendingAction = nil }
             Button("Execute") { executePendingAction() }
@@ -702,7 +706,7 @@ private struct TabStripView: View {
     var body: some View {
         GeometryReader { geo in
             let count = tabManager.tabCount()
-            let tabWidth: CGFloat = count > 0 ? max(90, (geo.size.width - 59) / CGFloat(count)) : 0
+            let tabWidth: CGFloat = count > 0 ? max(90, (geo.size.width - 44) / CGFloat(count)) : 0
 
             HStack(spacing: 0) {
                 ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
@@ -723,7 +727,7 @@ private struct TabStripView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 32, height: rowHeight - 4)
+                        .frame(width: 36, height: rowHeight)
                         .contentShape(Rectangle())
                         .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                 }
@@ -757,6 +761,7 @@ private struct TabPill: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
+            // Tab body — clicking switches to this tab
             Button(action: onSelect) {
                 HStack(spacing: 6) {
                     Image(systemName: leadingIcon)
@@ -772,20 +777,23 @@ private struct TabPill: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.leading, 8)
-                .padding(.trailing, 24)
+                .padding(.trailing, 28)
                 .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
+            // Close button — always visible, clickable
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .frame(width: 16, height: 16)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .opacity(isHovered || isActive ? 1 : 0)
+            .opacity(isHovered || isActive ? 1 : 0.6)
             .padding(.trailing, 6)
             .accessibilityLabel("Close tab")
         }
