@@ -24,63 +24,84 @@ struct BrowserShellView: View {
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
 
+    private let tabBarHeight: CGFloat = 40
+
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                // Top bar: Back, Forward, Reload, Address bar, Go, New Tab, Close Tab
-                HStack(spacing: 8) {
-                    Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                        Image(systemName: "chevron.right")
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.plain)
-
-                    TextField("Search or enter URL", text: $addressBarText, onCommit: goToAddress)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($addressBarFocused)
-
-                    Button("Go") { goToAddress() }
-
-                    Button(action: newTab) {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: closeCurrentTab) {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(8)
-
-                // Tab strip
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) {
-                        ForEach(tabManager.tabOrder, id: \.self) { tabId in
-                            TabPill(
-                                tabId: tabId,
-                                url: tabManager.tabURL[tabId] ?? nil,
-                                isActive: tabManager.currentTab == tabId,
-                                onSelect: { switchToTab(tabId) },
-                                onClose: { closeTab(tabId) }
-                            )
+                // Unified top chrome: tabs + address bar + nav
+                HStack(spacing: 0) {
+                    // Tab strip (pill-shaped, scrollable)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        ScrollViewReader { proxy in
+                            HStack(spacing: 4) {
+                                ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
+                                    TabPill(
+                                        tabId: tabId,
+                                        index: index + 1,
+                                        url: tabManager.tabURL[tabId] ?? nil,
+                                        isActive: tabManager.currentTab == tabId,
+                                        onSelect: { switchToTab(tabId) },
+                                        onClose: { closeTab(tabId) }
+                                    )
+                                    .id(tabId)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
                         }
                     }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color(nsColor: .controlBackgroundColor))
+                    .frame(minWidth: 80, maxWidth: 280)
 
-                // Main content
+                    // Address bar (continuous strip from tabs)
+                    HStack(spacing: 6) {
+                        Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Back")
+
+                        Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Forward")
+
+                        Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Reload")
+
+                        TextField("Search or enter URL", text: $addressBarText, onCommit: goToAddress)
+                            .textFieldStyle(.plain)
+                            .focused($addressBarFocused)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
+                            .cornerRadius(6)
+
+                        Button("Go", action: goToAddress)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                        Button(action: newTab) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("New tab")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                }
+                .frame(height: tabBarHeight)
+                .background(.ultraThinMaterial)
+
+                // Main content (flush under chrome)
                 if let currentId = tabManager.currentTab {
                     WebViewContainer(webView: web.ensureWebView(for: currentId))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -138,16 +159,27 @@ struct BrowserShellView: View {
                 addressBarText = url.absoluteString
             }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "e" {
-                    DispatchQueue.main.async {
-                        guard let id = tabManager.currentTab else { return }
-                        if tabsWithPanelOpen.contains(id) {
-                            tabsWithPanelOpen.remove(id)
-                        } else {
-                            tabsWithPanelOpen.insert(id)
+                let key = event.charactersIgnoringModifiers ?? ""
+                if event.modifierFlags.contains(.command) {
+                    if key == "e" {
+                        DispatchQueue.main.async {
+                            guard let id = tabManager.currentTab else { return }
+                            if tabsWithPanelOpen.contains(id) {
+                                tabsWithPanelOpen.remove(id)
+                            } else {
+                                tabsWithPanelOpen.insert(id)
+                            }
                         }
+                        return nil
                     }
-                    return nil
+                    if key == "t" {
+                        DispatchQueue.main.async { newTab() }
+                        return nil
+                    }
+                    if key == "w" {
+                        DispatchQueue.main.async { closeCurrentTab() }
+                        return nil
+                    }
                 }
                 return event
             }
@@ -289,10 +321,13 @@ struct BrowserShellView: View {
 
 private struct TabPill: View {
     let tabId: UUID
+    let index: Int
     let url: URL?
     let isActive: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
+
+    @State private var isHovered = false
 
     private var title: String {
         url?.host ?? url?.absoluteString ?? "New Tab"
@@ -304,21 +339,44 @@ private struct TabPill: View {
                 Text(title)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: 120)
+                    .font(.system(size: 12))
+                    .frame(maxWidth: 140)
             }
             .buttonStyle(.plain)
             .padding(.leading, 8)
-            .padding(.vertical, 4)
-            .background(isActive ? Color.accentColor.opacity(0.2) : Color.clear)
-            .cornerRadius(4)
+            .padding(.trailing, isHovered ? 4 : 8)
+            .padding(.vertical, 6)
 
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+            if isHovered {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 6)
+                .accessibilityLabel("Close tab")
             }
-            .buttonStyle(.plain)
         }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isActive ? Color.accentColor.opacity(0.25) : (isHovered ? Color.primary.opacity(0.06) : Color.clear))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isActive ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(isActive ? 0.06 : 0), radius: 2, y: 1)
+        .scaleEffect(isHovered && !isActive ? 1.02 : 1.0)
+        .animation(.easeOut(duration: 0.15), value: isHovered)
+        .animation(.easeOut(duration: 0.15), value: isActive)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Tab \(index): \(title)")
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
     }
 }
 
