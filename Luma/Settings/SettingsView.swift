@@ -40,7 +40,7 @@ struct SettingsView: View {
                     .disabled(isProcessing)
                 
                 // Read-only key status row
-                Text("Status: " + (hasKey ? "Stored" : "Missing"))
+                Text("AI Status: " + (hasKey ? "Key stored" : "No API key"))
                     .font(.caption)
                     .foregroundColor(hasKey ? .green : .secondary)
                 
@@ -123,7 +123,7 @@ struct SettingsView: View {
     private func loadKeyStatus() {
         let existingKey = KeychainManager.shared.fetchGeminiKey()
         hasKey = (existingKey != nil)
-        statusText = hasKey ? "Key stored in Keychain" : "No Gemini key saved"
+        statusText = hasKey ? "Key stored in Keychain. AI Status: Ready." : "No Gemini key saved."
     }
     
     private func saveKey() {
@@ -140,7 +140,8 @@ struct SettingsView: View {
             try KeychainManager.shared.storeGeminiKey(trimmed)
             hasKey = true
             keyInput = "" // Clear input field for security
-            statusText = "Key saved to Keychain"
+            GeminiClient.clearClientCaches()
+            statusText = "Key saved to Keychain. AI Status: Ready."
         } catch {
             statusText = "Error saving key: \(error.localizedDescription)"
         }
@@ -155,7 +156,8 @@ struct SettingsView: View {
         do {
             try KeychainManager.shared.deleteGeminiKey()
             hasKey = false
-            statusText = "Key deleted"
+            GeminiClient.clearClientCaches()
+            statusText = "Key deleted. AI Status: No API key."
         } catch {
             statusText = "Error deleting key: \(error.localizedDescription)"
         }
