@@ -84,8 +84,7 @@ struct CommandSurfaceView: View {
                     GrowingTextEditor(
                         text: $inputText,
                         placeholder: "Message...",
-                        minHeight: 44,
-                        maxHeight: 200
+                        minHeight: 36
                     )
                     .padding(8)
                     .background(darkBgSecondary)
@@ -361,20 +360,25 @@ private struct GrowingTextEditor: View {
     @Binding var text: String
     var placeholder: String
     var minHeight: CGFloat
-    var maxHeight: CGFloat
 
-    @State private var editorHeight: CGFloat = 44
+    /// Height from content; no upper bound so the whole query is visible.
+    @State private var contentHeight: CGFloat = 36
 
     private let font = Font.system(size: 13)
 
+    private var boxHeight: CGFloat {
+        max(minHeight, contentHeight)
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // Invisible text to measure content height (same font as TextEditor)
+            // Measure content height using invisible text (opacity 0 so no double-text overlay)
             Text(text.isEmpty ? " " : text)
                 .font(font)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(8)
+                .opacity(0)
                 .background(
                     GeometryReader { g in
                         Color.clear.preference(key: TextHeightKey.self, value: g.size.height)
@@ -386,19 +390,22 @@ private struct GrowingTextEditor: View {
                 .font(font)
                 .scrollContentBackground(.hidden)
                 .padding(4)
-                .frame(minHeight: minHeight, maxHeight: min(maxHeight, max(minHeight, editorHeight)))
+                .frame(minHeight: minHeight, maxHeight: .infinity)
+                .frame(height: boxHeight)
 
             if text.isEmpty {
                 Text(placeholder)
                     .font(font)
                     .foregroundColor(.white.opacity(0.4))
                     .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(height: boxHeight)
                     .allowsHitTesting(false)
             }
         }
+        .frame(height: boxHeight)
         .onPreferenceChange(TextHeightKey.self) { h in
-            editorHeight = h
+            contentHeight = max(minHeight, h)
         }
     }
 }
