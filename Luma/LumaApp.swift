@@ -14,6 +14,7 @@ struct LumaApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
+        .defaultSize(width: 1200, height: 800)
         Settings {
             SettingsView()
         }

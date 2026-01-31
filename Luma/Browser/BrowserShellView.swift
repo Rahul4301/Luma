@@ -39,7 +39,7 @@ struct BrowserShellView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    // Chrome: tabs + address bar (in content area so tab clicks work — toolbar has hit-testing issues on macOS)
+                    // Chrome: tabs + address bar (content area — visible and clickable)
                     VStack(spacing: 0) {
                         TabStripView(
                             tabManager: tabManager,
@@ -58,88 +58,88 @@ struct BrowserShellView: View {
 
                         // Address bar row (Chrome-style omnibox)
                         HStack(spacing: 6) {
-                        // Nav buttons (rounded)
-                        HStack(spacing: 2) {
-                            Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                                Image(systemName: "chevron.left")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                            // Nav buttons (rounded)
+                            HStack(spacing: 2) {
+                                Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                                    Image(systemName: "chevron.left")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Back")
+
+                                Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Forward")
+
+                                Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Reload")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Back")
 
-                            Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Forward")
-
-                            Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Reload")
-                        }
-
-                        // Omnibox (Chrome-style: icon left, large field, magnifier right, focus ring)
-                        HStack(spacing: 8) {
-                            Image(systemName: "globe")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-
-                            TextField("Search or enter website name", text: $addressBarText)
-                                .textFieldStyle(.plain)
-                                .focused($addressBarFocused)
-                                .onSubmit { navigateFromAddressBar() }
-
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color(white: 0.18))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
-                        )
-                        .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
-
-                        // Chat pill button (Chrome-style)
-                        Button(action: toggleAIPanel) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "bubble.left.and.bubble.right")
-                                    .font(.system(size: 10, weight: .medium))
-                                Text("Chat")
+                            // Omnibox (Chrome-style: icon left, large field, magnifier right, focus ring)
+                            HStack(spacing: 8) {
+                                Image(systemName: "globe")
                                     .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.secondary)
+
+                                TextField("Search or enter website name", text: $addressBarText)
+                                    .textFieldStyle(.plain)
+                                    .focused($addressBarFocused)
+                                    .onSubmit { navigateFromAddressBar() }
+
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.secondary)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
                             .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(white: 0.22).opacity(0.8))
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color(white: 0.18))
                             )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Toggle AI panel")
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .frame(height: addressBarHeight)
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, chromePadding)
-                        .padding(.bottom, chromePadding)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
+                            )
+                            .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
+
+                            // Chat pill button (Chrome-style)
+                            Button(action: toggleAIPanel) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "bubble.left.and.bubble.right")
+                                        .font(.system(size: 10, weight: .medium))
+                                    Text("Chat")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .fill(Color(white: 0.22).opacity(0.8))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Toggle AI panel")
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .frame(height: addressBarHeight)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, chromePadding)
+                            .padding(.bottom, chromePadding)
                     }
                     .background(
                         tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
@@ -694,7 +694,7 @@ private struct PanelResizeHandle: View {
 
 // MARK: - Tab strip (titlebar, leading-aligned)
 
-private struct TabStripView: View {
+struct TabStripView: View {
     @ObservedObject var tabManager: TabManager
     let contentAreaColor: Color
     let onSwitch: (UUID) -> Void
