@@ -25,6 +25,8 @@ struct BrowserShellView: View {
     @State private var restoreAddressBarOnEscape: Bool = false
     @State private var isFirstLoad: Bool = true
     @FocusState private var addressBarFocused: Bool
+    @State private var searchSuggestions: [String] = []
+    @State private var suggestionDebounceTask: DispatchWorkItem?
 
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
@@ -40,100 +42,147 @@ struct BrowserShellView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    // Address bar row (Chrome-style omnibox)
-                    HStack(spacing: 6) {
-                        // Nav buttons (rounded)
-                        HStack(spacing: 2) {
-                            Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                                Image(systemName: "chevron.left")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                    // Address bar row + suggestions (suggestions below, not overlapping)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 6) {
+                            // Nav buttons (rounded)
+                            HStack(spacing: 2) {
+                                Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                                    Image(systemName: "chevron.left")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Back")
+
+                                Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Forward")
+
+                                Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Reload")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Back")
 
-                            Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Forward")
-
-                            Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Reload")
-                        }
-
-                        // Omnibox (Chrome-style: icon left, large field, magnifier right, focus ring)
-                        HStack(spacing: 8) {
-                            Image(systemName: "globe")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-
-                            TextField("Search or enter website name", text: $addressBarText)
-                                .textFieldStyle(.plain)
-                                .focused($addressBarFocused)
-                                .onSubmit { navigateFromAddressBar() }
-
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color(white: 0.18))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
-                        )
-                        .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
-                        .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
-                            handleURLDrop(providers: providers) { url in
-                                addressBarText = url.absoluteString
-                                navigateToURL(url)
-                            }
-                        }
-
-                        // Chat pill button (Chrome-style)
-                        Button(action: toggleAIPanel) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "bubble.left.and.bubble.right")
-                                    .font(.system(size: 10, weight: .medium))
-                                Text("Chat")
+                            // Omnibox (search bar only)
+                            HStack(spacing: 8) {
+                                Image(systemName: "globe")
                                     .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.secondary)
+
+                                TextField("Search or enter website name", text: $addressBarText)
+                                    .textFieldStyle(.plain)
+                                    .focused($addressBarFocused)
+                                    .onSubmit {
+                                        searchSuggestions = []
+                                        navigateFromAddressBar()
+                                    }
+                                    .onChange(of: addressBarText) { _, newValue in
+                                        fetchSearchSuggestions(for: newValue)
+                                    }
+                                    .onChange(of: addressBarFocused) { _, focused in
+                                        if !focused { searchSuggestions = [] }
+                                    }
+
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.secondary)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
                             .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(white: 0.22).opacity(0.8))
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color(white: 0.18))
                             )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
+                            )
+                            .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
+                            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                                handleURLDrop(providers: providers) { url in
+                                    addressBarText = url.absoluteString
+                                    navigateToURL(url)
+                                }
+                            }
+
+                            // Chat pill button (Chrome-style)
+                            Button(action: toggleAIPanel) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "bubble.left.and.bubble.right")
+                                        .font(.system(size: 10, weight: .medium))
+                                    Text("Chat")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .fill(Color(white: 0.22).opacity(0.8))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Toggle AI panel")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Toggle AI panel")
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .frame(height: addressBarHeight)
+                        .frame(maxWidth: .infinity)
+                        .padding(chromePadding)
+                        .background(
+                            tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
+                                ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
+                                : AnyView(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
+                        )
+
+                        // Search suggestions dropdown (below the search bar, not overlapping)
+                        if addressBarFocused, !searchSuggestions.isEmpty {
+                            VStack(spacing: 0) {
+                                ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
+                                    Button(action: {
+                                        addressBarText = suggestion
+                                        searchSuggestions = []
+                                        navigateFromAddressBar()
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "magnifyingglass")
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                                .frame(width: 20)
+                                            Text(suggestion)
+                                                .font(.system(size: 13))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .background(Color(nsColor: .windowBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .shadow(color: .black.opacity(0.15), radius: 8)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .frame(height: addressBarHeight)
-                    .frame(maxWidth: .infinity)
-                    .padding(chromePadding)
-                    .background(
-                        tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
-                            ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
-                            : AnyView(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
-                    )
 
                     if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil {
                         HairlineDivider(opacity: 0.15)
@@ -344,6 +393,47 @@ struct BrowserShellView: View {
         } else {
             addressBarText = ""
         }
+    }
+
+    /// Fetches search suggestions (debounced 25ms). Uses Google Suggest.
+    private func fetchSearchSuggestions(for query: String) {
+        suggestionDebounceTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count >= 2 else {
+            searchSuggestions = []
+            return
+        }
+        let task = DispatchWorkItem {
+            guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let url = URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") else { return }
+            URLSession.shared.dataTask(with: url) { data, _, _ in
+                guard let data = data,
+                      var raw = String(data: data, encoding: .utf8) else {
+                    DispatchQueue.main.async { searchSuggestions = [] }
+                    return
+                }
+                if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
+                    raw = String(raw[start...end])
+                }
+                guard let jsonData = raw.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: jsonData) as? [Any],
+                      json.count >= 2,
+                      let rawSuggestions = json[1] as? [Any] else {
+                    DispatchQueue.main.async { searchSuggestions = [] }
+                    return
+                }
+                let phrases = rawSuggestions.compactMap { item -> String? in
+                    if let s = item as? String { return s }
+                    if let arr = item as? [Any], let first = arr.first as? String { return first }
+                    return nil
+                }
+                DispatchQueue.main.async {
+                    searchSuggestions = phrases.prefix(8).map { $0 }
+                }
+            }.resume()
+        }
+        suggestionDebounceTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: task)
     }
 
     /// Omnibox parsing: URL, domain, or search query.
@@ -844,7 +934,7 @@ private struct TabPill: View {
     }
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        HStack(spacing: 0) {
             Button(action: onSelect) {
                 HStack(spacing: 6) {
                     Image(systemName: leadingIcon)
@@ -860,9 +950,10 @@ private struct TabPill: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.leading, 8)
-                .padding(.trailing, 24)
+                .padding(.trailing, 4)
                 .padding(.vertical, 4)
                 .contentShape(Rectangle())
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.plain)
 
@@ -870,13 +961,12 @@ private struct TabPill: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.secondary)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .opacity(isHovered || isActive ? 1 : 0)
             .allowsHitTesting(isHovered || isActive)
-            .padding(.trailing, 6)
-            .accessibilityLabel("Close tab")
         }
         .onHover { hovering in
             isHovered = hovering

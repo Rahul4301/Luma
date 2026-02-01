@@ -21,6 +21,7 @@ struct CommandSurfaceView: View {
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
     @State private var actionProposedMessage: String? = nil
+    @State private var includePageContext: Bool = false
     @State private var includeSelection: Bool = false
     @State private var selectedText: String? = nil
     @State private var whatWillBeSentExpanded: Bool = false
@@ -113,7 +114,8 @@ struct CommandSurfaceView: View {
                         placeholder: "Message Luma...",
                         minHeight: 36,
                         fontSize: chatFontSize,
-                        isFocused: $isInputFocused
+                        isFocused: $isInputFocused,
+                        onSubmit: sendCommand
                     )
                     .padding(10)
                     .frame(maxHeight: 80)
@@ -135,10 +137,21 @@ struct CommandSurfaceView: View {
                     .buttonStyle(.plain)
                     .disabled(inputText.isEmpty || isSending)
                     .keyboardShortcut(.return, modifiers: .command)
-                    .help("Send (⌘↵)")
+                    .help("Send (Enter or ⌘↵)")
                 }
 
                 HStack(spacing: 12) {
+                    Toggle(isOn: $includePageContext) {
+                        Text("Include page context")
+                            .font(.caption)
+                            .foregroundColor(textSecondary)
+                    }
+                    .toggleStyle(.checkbox)
+                    .tint(textSecondary)
+                    .onChange(of: includePageContext) { _, on in
+                        if on { loadPageContext() }
+                    }
+
                     Toggle(isOn: $includeSelection) {
                         Text("Include selection")
                             .font(.caption)
@@ -241,7 +254,7 @@ struct CommandSurfaceView: View {
             .foregroundColor(isUser ? .white : textColor)
             .textSelection(.enabled)
             .multilineTextAlignment(isUser ? .trailing : .leading)
-            .lineSpacing(isUser ? 0 : 2)
+            .lineSpacing(isUser ? 0 : 5)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -255,20 +268,22 @@ struct CommandSurfaceView: View {
     @ViewBuilder
     private func contextPreviewContent() -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let url = webViewWrapper.currentURL {
-                Text("URL: \(url.absoluteString)")
-                    .foregroundColor(Color(white: 0.65))
-                    .lineLimit(1)
-            }
-            if let title = pageTitle, !title.isEmpty {
-                Text("Title: \(title)")
-                    .foregroundColor(Color(white: 0.65))
-                    .lineLimit(1)
-            }
-            if let text = pageText, !text.isEmpty {
-                Text("Page: \(text.prefix(200))\(text.count > 200 ? "…" : "")")
-                    .foregroundColor(Color(white: 0.65))
-                    .lineLimit(3)
+            if includePageContext {
+                if let url = webViewWrapper.currentURL {
+                    Text("URL: \(url.absoluteString)")
+                        .foregroundColor(Color(white: 0.65))
+                        .lineLimit(1)
+                }
+                if let title = pageTitle, !title.isEmpty {
+                    Text("Title: \(title)")
+                        .foregroundColor(Color(white: 0.65))
+                        .lineLimit(1)
+                }
+                if let text = pageText, !text.isEmpty {
+                    Text("Page: \(text.prefix(200))\(text.count > 200 ? "…" : "")")
+                        .foregroundColor(Color(white: 0.65))
+                        .lineLimit(3)
+                }
             }
             if includeSelection, let sel = selectedText, !sel.isEmpty {
                 Text("Selection: \(sel.prefix(100))\(sel.count > 100 ? "…" : "")")
@@ -329,20 +344,20 @@ struct CommandSurfaceView: View {
         }
     }
 
-    /// Builds context string from page metadata and optional selection.
+    /// Builds context string from page metadata and/or selection. Only when user opts in.
     private func buildContextString() -> String? {
         var parts: [String] = []
 
-        if let url = webViewWrapper.currentURL {
-            parts.append("URL: \(url.absoluteString)")
-        }
-
-        if let title = pageTitle, !title.isEmpty {
-            parts.append("Title: \(title)")
-        }
-
-        if let text = pageText, !text.isEmpty {
-            parts.append("Page content:\n\(text)")
+        if includePageContext {
+            if let url = webViewWrapper.currentURL {
+                parts.append("URL: \(url.absoluteString)")
+            }
+            if let title = pageTitle, !title.isEmpty {
+                parts.append("Title: \(title)")
+            }
+            if let text = pageText, !text.isEmpty {
+                parts.append("Page content:\n\(text)")
+            }
         }
 
         if includeSelection, let sel = selectedText, !sel.isEmpty {
@@ -364,7 +379,6 @@ struct CommandSurfaceView: View {
         messages.append(userMsg)
         inputText = ""
 
-        // Always include page context
         let context = buildContextString()
         proceedWithSend(prompt: trimmed, context: context)
     }
@@ -415,6 +429,7 @@ private struct GrowingTextEditor: View {
     var minHeight: CGFloat
     var fontSize: CGFloat = 13
     @FocusState.Binding var isFocused: Bool
+    var onSubmit: (() -> Void)? = nil
 
     /// Height from content; no upper bound so the whole query is visible.
     @State private var contentHeight: CGFloat = 36
@@ -444,14 +459,14 @@ private struct GrowingTextEditor: View {
                 )
                 .allowsHitTesting(false)
 
-            TextEditor(text: $text)
-                .font(font)
-                .foregroundColor(textColor)
-                .scrollContentBackground(.hidden)
-                .padding(4)
-                .frame(minHeight: minHeight, maxHeight: .infinity)
-                .frame(height: boxHeight)
-                .focused($isFocused)
+            EnterSubmittingTextEditor(
+                text: $text,
+                fontSize: fontSize,
+                minHeight: minHeight,
+                onSubmit: onSubmit
+            )
+            .focused($isFocused)
+            .frame(height: boxHeight)
 
             if text.isEmpty {
                 Text(placeholder)
@@ -466,6 +481,93 @@ private struct GrowingTextEditor: View {
         .frame(height: boxHeight)
         .onPreferenceChange(TextHeightKey.self) { h in
             contentHeight = max(minHeight, h)
+        }
+    }
+}
+
+// MARK: - Enter-submitting NSTextView (Return sends, Shift+Return newline)
+
+private final class EnterSubmittingTextView: NSScrollView {
+    private let onSubmit: (() -> Void)?
+    private var textView: NSTextView!
+    var onTextChange: ((String) -> Void)?
+    var fontSize: CGFloat = 13 { didSet { textView?.font = .systemFont(ofSize: fontSize) } }
+
+    init(onSubmit: (() -> Void)?, fontSize: CGFloat) {
+        self.onSubmit = onSubmit
+        self.fontSize = fontSize
+        super.init(frame: .zero)
+        hasVerticalScroller = true
+        hasHorizontalScroller = false
+        autohidesScrollers = true
+        borderType = .noBorder
+        drawsBackground = false
+
+        let tv = NSTextView()
+        tv.isRichText = false
+        tv.drawsBackground = false
+        tv.font = .systemFont(ofSize: fontSize)
+        tv.textColor = NSColor(white: 0.9, alpha: 1)
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
+        documentView = tv
+        textView = tv
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setDelegate(_ delegate: NSTextViewDelegate?) {
+        textView.delegate = delegate
+    }
+
+    func setText(_ string: String) {
+        textView.string = string
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36, !event.modifierFlags.contains(.shift) {
+            onSubmit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
+private struct EnterSubmittingTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    var fontSize: CGFloat
+    var minHeight: CGFloat
+    var onSubmit: (() -> Void)?
+
+    func makeNSView(context: Context) -> EnterSubmittingTextView {
+        let view = EnterSubmittingTextView(onSubmit: onSubmit, fontSize: fontSize)
+        view.setText(text)
+        view.setDelegate(context.coordinator)
+        return view
+    }
+
+    func updateNSView(_ nsView: EnterSubmittingTextView, context: Context) {
+        if let tv = nsView.documentView as? NSTextView, tv.string != text {
+            tv.string = text
+        }
+        nsView.fontSize = fontSize
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: EnterSubmittingTextEditor
+
+        init(_ parent: EnterSubmittingTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
         }
     }
 }
