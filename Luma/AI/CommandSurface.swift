@@ -33,8 +33,8 @@ struct CommandSurfaceView: View {
     @State private var contextRefreshTimer: Timer? = nil
 
     private let panelBg = Color.black
-    private let textPrimary = Color.white
-    private let textSecondary = Color.white.opacity(0.6)
+    private let textPrimary = Color(white: 0.9)
+    private let textSecondary = Color(white: 0.6)
     /// Xcode AI assistant-style glow: cyan when active, subtle when idle
     private let glowColorActive = Color(red: 0.35, green: 0.75, blue: 1.0)
     private let glowColorDim = Color(red: 0.3, green: 0.6, blue: 0.9).opacity(0.15)
@@ -207,11 +207,23 @@ struct CommandSurfaceView: View {
         let isUser: Bool
         let fontSize: CGFloat
 
+        private let userBubbleColor = Color(white: 0.28)
+        private let textColor = Color(white: 0.88)
+
         var body: some View {
             HStack(alignment: .top, spacing: 0) {
                 if isUser { Spacer(minLength: 32) }
-                messageTextView
-                    .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+                if isUser {
+                    messageTextView
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(userBubbleColor)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .frame(maxWidth: 320, alignment: .trailing)
+                } else {
+                    messageTextView
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if !isUser { Spacer(minLength: 32) }
             }
         }
@@ -226,9 +238,10 @@ struct CommandSurfaceView: View {
                 }
             }
             .font(.system(size: fontSize))
-            .foregroundColor(.white)
+            .foregroundColor(isUser ? .white : textColor)
             .textSelection(.enabled)
             .multilineTextAlignment(isUser ? .trailing : .leading)
+            .lineSpacing(isUser ? 0 : 2)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -244,22 +257,22 @@ struct CommandSurfaceView: View {
         VStack(alignment: .leading, spacing: 4) {
             if let url = webViewWrapper.currentURL {
                 Text("URL: \(url.absoluteString)")
-                    .foregroundColor(Color.white.opacity(0.7))
+                    .foregroundColor(Color(white: 0.65))
                     .lineLimit(1)
             }
             if let title = pageTitle, !title.isEmpty {
                 Text("Title: \(title)")
-                    .foregroundColor(Color.white.opacity(0.7))
+                    .foregroundColor(Color(white: 0.65))
                     .lineLimit(1)
             }
             if let text = pageText, !text.isEmpty {
                 Text("Page: \(text.prefix(200))\(text.count > 200 ? "…" : "")")
-                    .foregroundColor(Color.white.opacity(0.7))
+                    .foregroundColor(Color(white: 0.65))
                     .lineLimit(3)
             }
             if includeSelection, let sel = selectedText, !sel.isEmpty {
                 Text("Selection: \(sel.prefix(100))\(sel.count > 100 ? "…" : "")")
-                    .foregroundColor(Color.white.opacity(0.7))
+                    .foregroundColor(Color(white: 0.65))
                     .lineLimit(2)
             }
             if isLoadingContext {
@@ -407,8 +420,8 @@ private struct GrowingTextEditor: View {
     @State private var contentHeight: CGFloat = 36
 
     private var font: Font { Font.system(size: fontSize) }
-    private let textColor = Color.white
-    private let placeholderColor = Color.white.opacity(0.4)
+    private let textColor = Color(white: 0.9)
+    private let placeholderColor = Color(white: 0.5)
 
     private var boxHeight: CGFloat {
         max(minHeight, contentHeight)

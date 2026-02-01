@@ -21,18 +21,20 @@ struct SettingsView: View {
                 .font(.largeTitle)
                 .padding(.bottom)
             
-            // AI Panel Text Size
+            // AI Panel Text Size (6–32 pt slider)
             VStack(alignment: .leading, spacing: 12) {
-                Text("AI Panel Text Size")
-                    .font(.headline)
-                Picker("", selection: $aiPanelFontSizeRaw) {
-                    Text("Small (11)").tag(11)
-                    Text("Medium (13)").tag(13)
-                    Text("Large (15)").tag(15)
-                    Text("Extra Large (17)").tag(17)
+                HStack {
+                    Text("AI Panel Text Size")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(aiPanelFontSizeRaw) pt")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                Slider(value: Binding(
+                    get: { Double(aiPanelFontSizeRaw) },
+                    set: { aiPanelFontSizeRaw = Int($0.rounded()) }
+                ), in: 6...32, step: 1)
             }
             .padding()
             .background(Color.gray.opacity(0.1))
