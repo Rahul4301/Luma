@@ -17,6 +17,7 @@ struct BrowserShellView: View {
     @State private var tabsWithPanelOpen: Set<UUID> = []
     @State private var tabChatHistory: [UUID: [ChatMessage]] = [:]
     @State private var aiPanelWidth: CGFloat = 380
+    @State private var shouldResetPanelWidth: Bool = false
     @State private var eventMonitor: Any?
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
@@ -35,7 +36,7 @@ struct BrowserShellView: View {
     private let tabStripHeight: CGFloat = 38
     private let addressBarHeight: CGFloat = 44
     private let chromeCornerRadius: CGFloat = 14
-    private let chromePadding: CGFloat = 6
+    private let chromePadding: CGFloat = 4
 
     var body: some View {
         ZStack {
@@ -47,8 +48,9 @@ struct BrowserShellView: View {
             // row is as tall as our tab strip.
             TitlebarConfigurator(tabStripHeight: tabStripHeight)
 
-            HStack(spacing: 0) {
-                VStack(spacing: 0) {
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
 
                     // ─── Tab strip ───────────────────────────────────────────
                     // We draw it at the very top of our content area, then pull
@@ -69,7 +71,7 @@ struct BrowserShellView: View {
                     .frame(height: tabStripHeight)
                     .padding(.leading, 78)   // clear traffic lights
                     .padding(.trailing, 8)
-                    .padding(.top, -tabStripHeight) // pull up into titlebar
+                    .padding(.top, -(tabStripHeight - 6)) // pull up into titlebar, leave 6pt breathing room
                     .background(WindowDragView())   // keep window-drag working on empty titlebar area
 
                     // ─── Divider between tab strip and address bar ───────────
@@ -170,7 +172,7 @@ struct BrowserShellView: View {
                         .accessibilityLabel("Toggle AI panel")
                     }
                     .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 2)
                     .frame(height: addressBarHeight)
                     .frame(maxWidth: .infinity)
                     .padding(chromePadding)
@@ -267,33 +269,43 @@ struct BrowserShellView: View {
                     }
                 }
 
-                // ─── AI side panel ───────────────────────────────────────────
-                if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
-                    HStack(spacing: 0) {
-                        PanelResizeHandle(panelWidth: $aiPanelWidth)
+                    // ─── AI side panel ───────────────────────────────────────────
+                    if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
+                        HStack(spacing: 0) {
+                            PanelResizeHandle(panelWidth: $aiPanelWidth)
 
-                        CommandSurfaceView(
-                            isPresented: Binding(
-                                get: { tabsWithPanelOpen.contains(currentId) },
-                                set: { if !$0 { tabsWithPanelOpen.remove(currentId) } }
-                            ),
-                            messages: Binding(
-                                get: { tabChatHistory[currentId] ?? [] },
-                                set: { tabChatHistory[currentId] = $0 }
-                            ),
-                            webViewWrapper: web,
-                            commandRouter: router,
-                            gemini: gemini
-                        ) { response in
-                            pendingAssistantText = response.text
-                            pendingAction = response.action
-                            showActionConfirm = (response.action != nil)
+                            CommandSurfaceView(
+                                isPresented: Binding(
+                                    get: { tabsWithPanelOpen.contains(currentId) },
+                                    set: { if !$0 { tabsWithPanelOpen.remove(currentId) } }
+                                ),
+                                messages: Binding(
+                                    get: { tabChatHistory[currentId] ?? [] },
+                                    set: { tabChatHistory[currentId] = $0 }
+                                ),
+                                webViewWrapper: web,
+                                commandRouter: router,
+                                gemini: gemini
+                            ) { response in
+                                pendingAssistantText = response.text
+                                pendingAction = response.action
+                                showActionConfirm = (response.action != nil)
+                            }
+                            .frame(width: aiPanelWidth)
+                            .clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius))
+                            .padding(.trailing, chromePadding)
+                            .padding(.vertical, chromePadding)
                         }
-                        .frame(width: aiPanelWidth)
-                        .background(Color.black)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        .animation(.easeInOut(duration: 0.1), value: tabsWithPanelOpen.contains(currentId))
+                        .onAppear {
+                            if shouldResetPanelWidth {
+                                // Set to 1/4 of total width (3:1 ratio)
+                                aiPanelWidth = geometry.size.width / 4
+                                shouldResetPanelWidth = false
+                            }
+                        }
                     }
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-                    .animation(.easeInOut(duration: 0.1), value: tabsWithPanelOpen.contains(currentId))
                 }
             }
         }
@@ -528,6 +540,7 @@ struct BrowserShellView: View {
         if tabsWithPanelOpen.contains(id) {
             tabsWithPanelOpen.remove(id)
         } else {
+            shouldResetPanelWidth = true
             tabsWithPanelOpen.insert(id)
         }
     }
