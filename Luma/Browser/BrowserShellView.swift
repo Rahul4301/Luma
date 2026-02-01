@@ -31,6 +31,8 @@ struct BrowserShellView: View {
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
 
+    // Layout constants
+    private let tabStripHeight: CGFloat = 38
     private let addressBarHeight: CGFloat = 44
     private let chromeCornerRadius: CGFloat = 14
     private let chromePadding: CGFloat = 6
@@ -40,9 +42,20 @@ struct BrowserShellView: View {
             Color(nsColor: .windowBackgroundColor)
                 .ignoresSafeArea()
 
+            // Configures the window titlebar to be tall enough to hold tabs.
+            // This is the key: it sets window.titlebarHeight so the traffic-light
+            // row is as tall as our tab strip.
+            TitlebarConfigurator(tabStripHeight: tabStripHeight)
+
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    // Custom titlebar/tab strip
+
+                    // ─── Tab strip ───────────────────────────────────────────
+                    // We draw it at the very top of our content area, then pull
+                    // it UP into the titlebar with a negative top padding equal
+                    // to the titlebar height.  Because titlebarAppearsTransparent
+                    // is set, our pixels paint right over the titlebar background.
+                    // .padding(.leading) clears the traffic-light buttons (≈78 pt).
                     TabStripView(
                         tabManager: tabManager,
                         contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
@@ -53,17 +66,19 @@ struct BrowserShellView: View {
                         onNewTab: newTab,
                         onDropURLForNewTab: { newTabWithURL($0) }
                     )
-                    .frame(height: 38)
-                    .background(
-                        WindowDragView()
-                    )
+                    .frame(height: tabStripHeight)
+                    .padding(.leading, 78)   // clear traffic lights
+                    .padding(.trailing, 8)
+                    .padding(.top, -tabStripHeight) // pull up into titlebar
+                    .background(WindowDragView())   // keep window-drag working on empty titlebar area
 
+                    // ─── Divider between tab strip and address bar ───────────
                     Divider()
                         .opacity(0.2)
 
-                    // Address bar row (layout flow only - fixed height)
+                    // ─── Address bar row ─────────────────────────────────────
                     HStack(spacing: 6) {
-                        // Nav buttons (rounded)
+                        // Nav buttons
                         HStack(spacing: 2) {
                             Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
                                 Image(systemName: "chevron.left")
@@ -93,7 +108,7 @@ struct BrowserShellView: View {
                             .accessibilityLabel("Reload")
                         }
 
-                        // Omnibox (search bar only)
+                        // Omnibox
                         HStack(spacing: 8) {
                             Image(systemName: "globe")
                                 .font(.system(size: 12, weight: .medium))
@@ -136,7 +151,7 @@ struct BrowserShellView: View {
                             }
                         }
 
-                        // Chat pill button (Chrome-style)
+                        // Chat pill
                         Button(action: toggleAIPanel) {
                             HStack(spacing: 4) {
                                 Image(systemName: "bubble.left.and.bubble.right")
@@ -169,7 +184,7 @@ struct BrowserShellView: View {
                         HairlineDivider(opacity: 0.15)
                     }
 
-                    // Web content or start page
+                    // ─── Web content or start page ───────────────────────────
                     if let currentId = tabManager.currentTab {
                         let tabHasURL = (tabManager.tabURL[currentId] ?? nil) != nil
                         if !tabHasURL {
@@ -215,7 +230,7 @@ struct BrowserShellView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
                 .overlay(alignment: .topLeading) {
-                    // Search suggestions overlay (absolutely positioned, does not affect layout)
+                    // Search suggestions dropdown
                     if addressBarFocused, !searchSuggestions.isEmpty {
                         VStack(spacing: 0) {
                             ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
@@ -247,13 +262,12 @@ struct BrowserShellView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .shadow(color: .black.opacity(0.15), radius: 8)
                         .padding(.top, addressBarHeight + chromePadding + 6)
-                        // Nav buttons: 28+28+28 = 84pt, spacing: 2+6 = 8pt, outer padding: 6+6 = 12pt
                         .padding(.leading, chromePadding + 6 + 84 + 8)
-                        // Width matches search bar: available width minus nav section minus chat button and spacing
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
                 }
 
+                // ─── AI side panel ───────────────────────────────────────────
                 if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
                     HStack(spacing: 0) {
                         PanelResizeHandle(panelWidth: $aiPanelWidth)
@@ -350,7 +364,6 @@ struct BrowserShellView: View {
                     }
                 }
                 if event.keyCode == 53 {
-                    // Escape: restore address bar to live URL and stop editing
                     DispatchQueue.main.async { restoreAddressBarOnEscape = true }
                     return nil
                 }
@@ -384,6 +397,8 @@ struct BrowserShellView: View {
         }
     }
 
+    // MARK: - Helpers
+
     private func syncAddressBarFromCurrentTab() {
         if let id = tabManager.currentTab {
             if let url = web.currentURL {
@@ -399,7 +414,6 @@ struct BrowserShellView: View {
         }
     }
 
-    /// Fetches search suggestions (debounced 25ms). Uses Google Suggest.
     private func fetchSearchSuggestions(for query: String) {
         suggestionDebounceTask?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -440,30 +454,24 @@ struct BrowserShellView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: task)
     }
 
-    /// Omnibox parsing: URL, domain, or search query.
     private func resolveToURL(_ input: String) -> URL? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-
         if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
             return URL(string: trimmed)
         }
-
         if !trimmed.contains(" "), trimmed.contains(".") {
             return URL(string: "https://" + trimmed)
         }
-
         let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
         return URL(string: "https://www.google.com/search?q=" + encoded)
     }
 
-    /// Navigate from address bar (Enter/Return). Uses omnibox rules; no navigation until Enter.
     private func navigateFromAddressBar() {
         guard let url = resolveToURL(addressBarText) else { return }
         navigateToURL(url)
     }
 
-    /// Navigate current tab (or create one) to the given URL. Used by address bar and drag-drop.
     private func navigateToURL(_ url: URL) {
         let title = url.host ?? url.absoluteString
         if tabManager.currentTab == nil {
@@ -479,7 +487,6 @@ struct BrowserShellView: View {
         addressBarText = url.absoluteString
     }
 
-    /// Creates a new tab and navigates to the given URL. Used by drag-drop on tab strip.
     private func newTabWithURL(_ url: URL) {
         let id = tabManager.newTab(url: url)
         _ = web.ensureWebView(for: id)
@@ -490,7 +497,6 @@ struct BrowserShellView: View {
         addressBarText = url.absoluteString
     }
 
-    /// Extracts URL from drop providers (links, file URLs, plain text). Calls action on main queue when URL is found.
     private func handleURLDrop(providers: [NSItemProvider], action: @escaping (URL) -> Void) -> Bool {
         guard let provider = providers.first else { return false }
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
@@ -558,17 +564,14 @@ struct BrowserShellView: View {
         syncAddressBarFromCurrentTab()
     }
 
-
     private func executePendingAction() {
         guard let action = pendingAction else { return }
-
         let tabToClose: UUID?
         if action.type == .close_tab, action.payload?["index"] == nil {
             tabToClose = tabManager.currentTab
         } else {
             tabToClose = nil
         }
-
         let result = router.execute(action: action, tabManager: tabManager)
         switch result {
         case .success:
@@ -592,12 +595,11 @@ struct BrowserShellView: View {
         case .failure:
             break
         }
-
         pendingAction = nil
     }
 }
 
-// MARK: - Start page (new tab / no URL)
+// MARK: - Start page
 
 private struct StartPageView: View {
     let entries: [HistoryEntry]
@@ -618,26 +620,18 @@ private struct StartPageView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
-                // Favorites — large icon tiles
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Favorites")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(sectionTitle)
-
                     HStack(spacing: 16) {
                         ForEach(Self.favorites, id: \.1) { title, urlString, iconName in
                             if let url = URL(string: urlString) {
-                                FavoriteTile(
-                                    title: title,
-                                    iconName: iconName,
-                                    action: { onSelect(url) }
-                                )
+                                FavoriteTile(title: title, iconName: iconName, action: { onSelect(url) })
                             }
                         }
                     }
                 }
-
-                // Recent — grid of cards (when history exists)
                 if !entries.isEmpty {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
@@ -650,7 +644,6 @@ private struct StartPageView: View {
                                 .foregroundColor(muted)
                                 .buttonStyle(.plain)
                         }
-
                         LazyVGrid(columns: [
                             GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12),
                         ], spacing: 12) {
@@ -673,7 +666,6 @@ private struct FavoriteTile: View {
     let title: String
     let iconName: String
     let action: () -> Void
-
     @State private var isHovered = false
 
     var body: some View {
@@ -703,7 +695,6 @@ private struct FavoriteTile: View {
 private struct RecentCard: View {
     let entry: HistoryEntry
     let action: () -> Void
-
     @State private var isHovered = false
 
     var body: some View {
@@ -715,7 +706,6 @@ private struct RecentCard: View {
                     .frame(width: 28, height: 28)
                     .background(Color.white.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-
                 VStack(alignment: .leading, spacing: 4) {
                     Text(entry.title)
                         .font(.system(size: 13, weight: .medium))
@@ -727,7 +717,6 @@ private struct RecentCard: View {
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-
                 Image(systemName: "arrow.right")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(.white.opacity(0.3))
@@ -742,7 +731,7 @@ private struct RecentCard: View {
     }
 }
 
-// MARK: - History sheet (Cmd+Y)
+// MARK: - History sheet
 
 private struct HistoryView: View {
     let entries: [HistoryEntry]
@@ -759,16 +748,13 @@ private struct HistoryView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("History")
-                    .font(.headline)
+                Text("History").font(.headline)
                 Spacer()
                 Button("Done", action: onDismiss)
                     .keyboardShortcut(.escape, modifiers: [])
             }
             .padding()
-
             Divider()
-
             if entries.isEmpty {
                 Text("No history yet")
                     .foregroundColor(.secondary)
@@ -779,16 +765,9 @@ private struct HistoryView: View {
                         onSelect(entry.url)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.title)
-                                .lineLimit(1)
-                                .font(.system(size: 13, weight: .medium))
-                            Text(entry.url.absoluteString)
-                                .lineLimit(1)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(Self.dateFormatter.string(from: entry.date))
-                                .font(.caption2)
-                                .foregroundColor(.secondary.opacity(0.8))
+                            Text(entry.title).lineLimit(1).font(.system(size: 13, weight: .medium))
+                            Text(entry.url.absoluteString).lineLimit(1).font(.caption).foregroundColor(.secondary)
+                            Text(Self.dateFormatter.string(from: entry.date)).font(.caption2).foregroundColor(.secondary.opacity(0.8))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
@@ -802,9 +781,10 @@ private struct HistoryView: View {
     }
 }
 
+// MARK: - Panel resize handle
+
 private struct PanelResizeHandle: View {
     @Binding var panelWidth: CGFloat
-
     private let minWidth: CGFloat = 280
     private let maxWidth: CGFloat = 700
     @State private var dragStartWidth: CGFloat = 0
@@ -815,29 +795,24 @@ private struct PanelResizeHandle: View {
             .frame(width: 6)
             .contentShape(Rectangle())
             .onHover { hovering in
-                if hovering {
-                    NSCursor.resizeLeftRight.push()
-                } else {
-                    NSCursor.pop()
-                }
+                if hovering { NSCursor.resizeLeftRight.push() }
+                else { NSCursor.pop() }
             }
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        if dragStartWidth == 0 {
-                            dragStartWidth = panelWidth
-                        }
+                        if dragStartWidth == 0 { dragStartWidth = panelWidth }
                         let newWidth = dragStartWidth - value.translation.width
                         panelWidth = min(maxWidth, max(minWidth, newWidth))
                     }
-                    .onEnded { _ in
-                        dragStartWidth = 0
-                    }
+                    .onEnded { _ in dragStartWidth = 0 }
             )
     }
 }
 
-// MARK: - Tab strip (titlebar, leading-aligned)
+// MARK: - Tab strip
+// No longer contains its own .padding(.leading, 72) — the parent applies
+// .padding(.leading, 78) to clear traffic lights.
 
 private struct TabStripView: View {
     @ObservedObject var tabManager: TabManager
@@ -854,39 +829,35 @@ private struct TabStripView: View {
             let count = tabManager.tabCount()
             let tabWidth: CGFloat = count > 0 ? max(90, 180) : 0
 
-            HStack(spacing: 0) {
-                ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
-                    TabPill(
-                        tabId: tabId,
-                        index: index + 1,
-                        url: tabManager.tabURL[tabId] ?? nil,
-                        isActive: tabManager.currentTab == tabId,
-                        contentAreaColor: contentAreaColor,
-                        onSelect: { onSwitch(tabId) },
-                        onClose: { onClose(tabId) }
-                    )
-                    .frame(width: tabWidth, height: rowHeight)
-                    .id(tabId)
-                }
-
-                Button(action: onNewTab) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, height: rowHeight - 4)
-                        .contentShape(Rectangle())
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("New tab")
-                .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
-                    urlDropHandler(providers: providers)
-                }
-
-                Spacer(minLength: 0)
+            ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
+                TabPill(
+                    tabId: tabId,
+                    index: index + 1,
+                    url: tabManager.tabURL[tabId] ?? nil,
+                    isActive: tabManager.currentTab == tabId,
+                    contentAreaColor: contentAreaColor,
+                    onSelect: { onSwitch(tabId) },
+                    onClose: { onClose(tabId) }
+                )
+                .frame(width: tabWidth, height: rowHeight)
+                .id(tabId)
             }
-            .padding(.leading, 80)
-            .padding(.trailing, 8)
+
+            Button(action: onNewTab) {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: rowHeight - 4)
+                    .contentShape(Rectangle())
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New tab")
+            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                urlDropHandler(providers: providers)
+            }
+
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
         .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
@@ -904,9 +875,7 @@ private struct TabStripView: View {
             }
         } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                if let u = url {
-                    DispatchQueue.main.async { onDropURLForNewTab(u) }
-                }
+                if let u = url { DispatchQueue.main.async { onDropURLForNewTab(u) } }
             }
         } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
             _ = provider.loadObject(ofClass: String.self) { str, _ in
@@ -929,13 +898,11 @@ private struct TabPill: View {
     let contentAreaColor: Color
     let onSelect: () -> Void
     let onClose: () -> Void
-
     @State private var isHovered = false
 
     private var title: String {
         url?.host ?? url?.absoluteString ?? "New Tab"
     }
-
     private var leadingIcon: String {
         url == nil ? "globe" : "doc.text"
     }
@@ -948,7 +915,6 @@ private struct TabPill: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(isActive ? .primary : .secondary)
                         .frame(width: 14, alignment: .center)
-
                     Text(title)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -975,9 +941,7 @@ private struct TabPill: View {
             .opacity(isHovered || isActive ? 1 : 0)
             .allowsHitTesting(isHovered || isActive)
         }
-        .onHover { hovering in
-            isHovered = hovering
-        }
+        .onHover { isHovered = $0 }
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isActive
@@ -992,9 +956,10 @@ private struct TabPill: View {
     }
 }
 
+// MARK: - NSViewRepresentables
+
 struct WebViewContainer: NSViewRepresentable {
     let webView: WKWebView
-
     func makeNSView(context: Context) -> WKWebView { webView }
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 }
@@ -1007,7 +972,30 @@ struct WindowDragView: NSViewRepresentable {
         }
         return view
     }
-    
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Configures the window for a Chrome/Dia-style titlebar:
+/// - titlebar is transparent so we can paint over it
+/// - title text is hidden
+/// - titlebar height is enlarged to fit the tab strip
+///
+/// The `tabStripHeight` parameter tells us how tall our tab strip is so we
+/// can match the titlebar to it exactly.
+struct TitlebarConfigurator: NSViewRepresentable {
+    let tabStripHeight: CGFloat
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.styleMask.insert(.fullSizeContentView)
+        }
+        return view
+    }
+
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
