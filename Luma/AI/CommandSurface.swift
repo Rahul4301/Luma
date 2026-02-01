@@ -15,19 +15,23 @@ struct CommandSurfaceView: View {
     let commandRouter: CommandRouter
     let gemini: GeminiClient
     let onActionProposed: (LLMResponse) -> Void
+    
+    // Tab ID for tracking summaries (passed from parent)
+    var tabId: UUID? = nil
 
     @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSizeRaw: Int = 13
     @State private var inputText: String = ""
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
     @State private var actionProposedMessage: String? = nil
-    @State private var includePageContext: Bool = false
     @State private var includeSelection: Bool = false
     @State private var selectedText: String? = nil
     @State private var whatWillBeSentExpanded: Bool = false
+    @State private var conversationSummary: String? = nil
+    @State private var lastSummarizedMessageCount: Int = 0
     @FocusState private var isInputFocused: Bool
 
-    // Auto-loaded page context
+    // Auto-loaded page context (always enabled for agentic behavior)
     @State private var pageTitle: String? = nil
     @State private var pageText: String? = nil
     @State private var isLoadingContext: Bool = false
@@ -46,9 +50,19 @@ struct CommandSurfaceView: View {
         VStack(spacing: 0) {
             // Header: ChatGPT-style minimal (Luma + status + close)
             HStack(spacing: 8) {
-                Text("Luma")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(textPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Luma")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(textPrimary)
+                    HStack(spacing: 4) {
+                        Image(systemName: "brain")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(textSecondary.opacity(0.7))
+                        Text("Context-aware • Recent context")
+                            .font(.system(size: 9, weight: .regular))
+                            .foregroundColor(textSecondary.opacity(0.7))
+                    }
+                }
                 statusDotView()
                 if KeychainManager.shared.fetchGeminiKey() == nil || GeminiClient.lastNetworkError != nil {
                     SettingsLink { Text("Settings").font(.caption2).foregroundColor(textSecondary) }
@@ -67,14 +81,14 @@ struct CommandSurfaceView: View {
             .padding(.vertical, 12)
             .background(panelBg)
 
-            // Collapsible "What will be sent" (off by default)
+            // Collapsible "What will be sent" (context always included)
             DisclosureGroup(isExpanded: $whatWillBeSentExpanded) {
                 contextPreviewContent()
                     .font(.system(size: 11))
                     .foregroundColor(textSecondary)
                     .padding(.top, 4)
             } label: {
-                Text("What will be sent")
+                Text("Context (always included)")
                     .font(.caption)
                     .foregroundColor(textSecondary)
             }
@@ -141,17 +155,6 @@ struct CommandSurfaceView: View {
                 }
 
                 HStack(spacing: 12) {
-                    Toggle(isOn: $includePageContext) {
-                        Text("Include page context")
-                            .font(.caption)
-                            .foregroundColor(textSecondary)
-                    }
-                    .toggleStyle(.checkbox)
-                    .tint(textSecondary)
-                    .onChange(of: includePageContext) { _, on in
-                        if on { loadPageContext() }
-                    }
-
                     Toggle(isOn: $includeSelection) {
                         Text("Include selection")
                             .font(.caption)
@@ -268,22 +271,21 @@ struct CommandSurfaceView: View {
     @ViewBuilder
     private func contextPreviewContent() -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if includePageContext {
-                if let url = webViewWrapper.currentURL {
-                    Text("URL: \(url.absoluteString)")
-                        .foregroundColor(Color(white: 0.65))
-                        .lineLimit(1)
-                }
-                if let title = pageTitle, !title.isEmpty {
-                    Text("Title: \(title)")
-                        .foregroundColor(Color(white: 0.65))
-                        .lineLimit(1)
-                }
-                if let text = pageText, !text.isEmpty {
-                    Text("Page: \(text.prefix(200))\(text.count > 200 ? "…" : "")")
-                        .foregroundColor(Color(white: 0.65))
-                        .lineLimit(3)
-                }
+            // Page context is always included
+            if let url = webViewWrapper.currentURL {
+                Text("URL: \(url.absoluteString)")
+                    .foregroundColor(Color(white: 0.65))
+                    .lineLimit(1)
+            }
+            if let title = pageTitle, !title.isEmpty {
+                Text("Title: \(title)")
+                    .foregroundColor(Color(white: 0.65))
+                    .lineLimit(1)
+            }
+            if let text = pageText, !text.isEmpty {
+                Text("Page: \(text.prefix(200))\(text.count > 200 ? "…" : "")")
+                    .foregroundColor(Color(white: 0.65))
+                    .lineLimit(3)
             }
             if includeSelection, let sel = selectedText, !sel.isEmpty {
                 Text("Selection: \(sel.prefix(100))\(sel.count > 100 ? "…" : "")")
@@ -344,20 +346,20 @@ struct CommandSurfaceView: View {
         }
     }
 
-    /// Builds context string from page metadata and/or selection. Only when user opts in.
+    /// Builds context string from page metadata and/or selection.
+    /// Page context is always included for agentic behavior.
     private func buildContextString() -> String? {
         var parts: [String] = []
 
-        if includePageContext {
-            if let url = webViewWrapper.currentURL {
-                parts.append("URL: \(url.absoluteString)")
-            }
-            if let title = pageTitle, !title.isEmpty {
-                parts.append("Title: \(title)")
-            }
-            if let text = pageText, !text.isEmpty {
-                parts.append("Page content:\n\(text)")
-            }
+        // Always include page context
+        if let url = webViewWrapper.currentURL {
+            parts.append("URL: \(url.absoluteString)")
+        }
+        if let title = pageTitle, !title.isEmpty {
+            parts.append("Title: \(title)")
+        }
+        if let text = pageText, !text.isEmpty {
+            parts.append("Page content:\n\(text)")
         }
 
         if includeSelection, let sel = selectedText, !sel.isEmpty {
@@ -375,7 +377,12 @@ struct CommandSurfaceView: View {
         errorMessage = nil
         actionProposedMessage = nil
 
-        let userMsg = ChatMessage(role: .user, text: trimmed)
+        let userMsg = ChatMessage(
+            role: .user,
+            text: trimmed,
+            pageURL: webViewWrapper.currentURL?.absoluteString,
+            pageTitle: pageTitle
+        )
         messages.append(userMsg)
         inputText = ""
 
@@ -386,15 +393,33 @@ struct CommandSurfaceView: View {
     private func proceedWithSend(prompt: String, context: String?) {
         let promptToSend = prompt
         let contextToSend = context
+        
+        // Only send last 4-6 messages for immediate context to save tokens
+        let recentContext = messages.dropLast().suffix(6)
 
-        gemini.generate(prompt: promptToSend, context: contextToSend) { result in
+        gemini.generate(
+            prompt: promptToSend,
+            context: contextToSend,
+            recentMessages: Array(recentContext),
+            conversationSummary: conversationSummary
+        ) { result in
             DispatchQueue.main.async {
                 isSending = false
 
                 switch result {
                 case .success(let data):
                     if let response = try? JSONDecoder().decode(LLMResponse.self, from: data) {
-                        messages.append(ChatMessage(role: .assistant, text: response.text))
+                        let assistantMsg = ChatMessage(
+                            role: .assistant,
+                            text: response.text,
+                            pageURL: webViewWrapper.currentURL?.absoluteString,
+                            pageTitle: pageTitle
+                        )
+                        messages.append(assistantMsg)
+                        
+                        // Auto-summarize every 8 messages
+                        checkAndSummarize()
+                        
                         if response.action != nil {
                             onActionProposed(response)
                             actionProposedMessage = "Action proposed"
@@ -406,8 +431,47 @@ struct CommandSurfaceView: View {
                 case .failure(let error):
                     let msg = error.localizedDescription
                     errorMessage = msg
-                    messages.append(ChatMessage(role: .assistant, text: "Error: \(msg)"))
+                    let errorMsg = ChatMessage(role: .assistant, text: "Error: \(msg)")
+                    messages.append(errorMsg)
                     actionProposedMessage = nil
+                }
+            }
+        }
+    }
+    
+    private func checkAndSummarize() {
+        // Auto-summarize every 8 messages (4 exchanges)
+        let messagesToSummarize = messages.count - lastSummarizedMessageCount
+        
+        if messagesToSummarize >= 8 {
+            let messagesToProcess = Array(messages.suffix(messagesToSummarize))
+            
+            gemini.summarizeConversation(messages: messagesToProcess) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let summary):
+                        // Append to existing summary or create new one
+                        if let existing = conversationSummary {
+                            conversationSummary = "\(existing)\n\nRecent: \(summary)"
+                        } else {
+                            conversationSummary = summary
+                        }
+                        lastSummarizedMessageCount = messages.count
+                        
+                        // Save summary to history if we have a tab ID
+                        if let tabId = tabId {
+                            let summaryObj = ConversationSummary(
+                                tabId: tabId,
+                                summary: summary,
+                                messageRange: (messages.count - messagesToSummarize)...(messages.count - 1)
+                            )
+                            HistoryManager.shared.addConversationSummary(tabId: tabId, summary: summaryObj)
+                        }
+                        
+                    case .failure:
+                        // Silently fail - summarization is optimization, not critical
+                        break
+                    }
                 }
             }
         }

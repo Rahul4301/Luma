@@ -24,13 +24,72 @@ struct LLMResponse: Codable {
 }
 
 /// A single message in the chat history.
-struct ChatMessage: Identifiable {
-    let id = UUID()
+struct ChatMessage: Identifiable, Codable {
+    let id: UUID
     let role: Role
     let text: String
+    let timestamp: Date
+    let pageURL: String?
+    let pageTitle: String?
 
-    enum Role {
+    enum Role: String, Codable {
         case user
         case assistant
+    }
+    
+    init(id: UUID = UUID(), role: Role, text: String, timestamp: Date = Date(), pageURL: String? = nil, pageTitle: String? = nil) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.timestamp = timestamp
+        self.pageURL = pageURL
+        self.pageTitle = pageTitle
+    }
+}
+
+/// Conversation summary for token-efficient context
+struct ConversationSummary: Codable, Identifiable {
+    let id: UUID
+    let tabId: UUID
+    let summary: String
+    let messageRange: ClosedRange<Int> // Which messages this summarizes
+    let timestamp: Date
+    
+    init(id: UUID = UUID(), tabId: UUID, summary: String, messageRange: ClosedRange<Int>, timestamp: Date = Date()) {
+        self.id = id
+        self.tabId = tabId
+        self.summary = summary
+        self.messageRange = messageRange
+        self.timestamp = timestamp
+    }
+}
+
+/// Unified history event (browsing or chat)
+struct HistoryEvent: Identifiable, Codable {
+    let id: UUID
+    let timestamp: Date
+    let type: EventType
+    
+    // For browsing events
+    let url: String?
+    let pageTitle: String?
+    
+    // For chat events
+    let chatMessages: [ChatMessage]?
+    let conversationSummary: String?
+    
+    enum EventType: String, Codable {
+        case pageVisit
+        case chatConversation
+    }
+    
+    init(id: UUID = UUID(), timestamp: Date, type: EventType, url: String? = nil, pageTitle: String? = nil, chatMessages: [ChatMessage]? = nil, conversationSummary: String? = nil) {
+        self.id = id
+        self.timestamp = timestamp
+        self.type = type
+        self.url = url
+        self.pageTitle = pageTitle
+        self.chatMessages = chatMessages
+        self.conversationSummary = conversationSummary
     }
 }

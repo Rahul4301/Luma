@@ -47,8 +47,10 @@ final class GeminiClient {
     /// - Parameters:
     ///   - prompt: User's prompt/query
     ///   - context: Optional context (selected text or excerpt) - only when user requests
+    ///   - recentMessages: Last few messages for immediate context (not full history to save tokens)
+    ///   - conversationSummary: Optional summary of older messages for extended context
     ///   - completion: Callback with Result containing LLMResponse JSON Data or Error
-    func generate(prompt: String, context: String?, completion: @escaping (Result<Data, Error>) -> Void) {
+    func generate(prompt: String, context: String?, recentMessages: [ChatMessage] = [], conversationSummary: String? = nil, completion: @escaping (Result<Data, Error>) -> Void) {
         // Fail closed if no API key
         guard let apiKey = apiKeyProvider() else {
             Self.lastNetworkError = "No API key available. Add key in Settings."
@@ -67,7 +69,20 @@ final class GeminiClient {
             return
         }
         
-        // Build request body: user's question first, context as reference
+        // Build request body: include only last few messages to save tokens
+        var contents: [[String: Any]] = []
+        
+        // Only include recent context (last 2-3 exchanges) to save tokens
+        // This provides immediate context without sending entire conversation
+        for message in recentMessages {
+            let role = message.role == .user ? "user" : "model"
+            contents.append([
+                "role": role,
+                "parts": [["text": message.text]]
+            ])
+        }
+        
+        // Add current user message with context
         let userMessage: String
         if let context = context, !context.isEmpty {
             userMessage = """
@@ -81,19 +96,23 @@ final class GeminiClient {
             userMessage = prompt
         }
 
-        let contents: [[String: Any]] = [
-            [
-                "role": "user",
-                "parts": [["text": userMessage]]
-            ]
-        ]
+        contents.append([
+            "role": "user",
+            "parts": [["text": userMessage]]
+        ])
 
         let systemInstruction = """
-        You are a helpful browser assistant. The user asks questions about the page they are viewing.
-        Use the provided page context to answer their question. Do NOT copy or echo back the context verbatim.
-        Summarize, explain, or respond to what they asked—don't just repeat the page content.
-        Respond naturally with full, free-form text. You may use markdown when it helps clarity.
-        Provide complete, detailed answers when appropriate—no arbitrary length limits.
+        You are Luma, a helpful browser assistant with full awareness of the page context.
+        You automatically receive the current page's title, URL, and content with every request.
+        Use this context proactively to provide relevant, contextual answers.
+        
+        You have access to the last few messages for immediate conversational context.
+        \(conversationSummary != nil ? "\nPrevious conversation summary: \(conversationSummary!)" : "")
+        
+        Respond naturally with full, free-form text using markdown when it helps clarity.
+        Provide complete, detailed answers—no arbitrary length limits.
+        
+        DO NOT copy or echo page content verbatim. Summarize, explain, or respond meaningfully.
         """
 
         var requestBody: [String: Any] = [
@@ -204,6 +223,85 @@ final class GeminiClient {
                     Self.lastNetworkError = error.localizedDescription
                     completion(.failure(error))
                 }
+            }
+        }.resume()
+    }
+    
+    /// Generates a concise summary of conversation messages.
+    /// Used to compress older messages into a summary for token efficiency.
+    ///
+    /// - Parameters:
+    ///   - messages: Messages to summarize
+    ///   - completion: Callback with Result containing summary string or Error
+    func summarizeConversation(messages: [ChatMessage], completion: @escaping (Result<String, Error>) -> Void) {
+        guard let apiKey = apiKeyProvider() else {
+            Self.lastNetworkError = "No API key available. Add key in Settings."
+            DispatchQueue.main.async {
+                completion(.failure(GeminiError.noAPIKeyOrUnauthorized))
+            }
+            return
+        }
+        
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=\(apiKey)") else {
+            DispatchQueue.main.async {
+                completion(.failure(GeminiAPIError.invalidURL))
+            }
+            return
+        }
+        
+        // Build conversation text
+        let conversationText = messages.map { msg in
+            let role = msg.role == .user ? "User" : "Assistant"
+            return "\(role): \(msg.text)"
+        }.joined(separator: "\n\n")
+        
+        let summaryPrompt = """
+        Create a concise summary (2-3 sentences) of the key points, questions asked, and information discussed in this conversation. Focus on facts and context that would be useful to reference later.
+        
+        Conversation:
+        \(conversationText)
+        """
+        
+        let contents: [[String: Any]] = [
+            [
+                "role": "user",
+                "parts": [["text": summaryPrompt]]
+            ]
+        ]
+        
+        let requestBody: [String: Any] = ["contents": contents]
+        
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: requestBody) else {
+            DispatchQueue.main.async {
+                completion(.failure(GeminiAPIError.invalidRequest))
+            }
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = jsonData
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let candidates = json["candidates"] as? [[String: Any]],
+                      let firstCandidate = candidates.first,
+                      let content = firstCandidate["content"] as? [String: Any],
+                      let parts = content["parts"] as? [[String: Any]] else {
+                    completion(.failure(GeminiAPIError.invalidResponseFormat))
+                    return
+                }
+                
+                let summary = parts.compactMap { $0["text"] as? String }.joined()
+                completion(.success(summary))
             }
         }.resume()
     }

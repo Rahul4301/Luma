@@ -22,7 +22,6 @@ struct BrowserShellView: View {
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
-    @State private var showHistorySheet: Bool = false
     @State private var restoreAddressBarOnEscape: Bool = false
     @State private var isFirstLoad: Bool = true
     @FocusState private var addressBarFocused: Bool
@@ -189,6 +188,8 @@ struct BrowserShellView: View {
                     // ─── Web content or start page ───────────────────────────
                     if let currentId = tabManager.currentTab {
                         let tabHasURL = (tabManager.tabURL[currentId] ?? nil) != nil
+                        let currentURL = tabManager.tabURL[currentId] ?? nil
+                        
                         if !tabHasURL {
                             StartPageView(
                                 entries: tabManager.navigationHistory,
@@ -198,15 +199,20 @@ struct BrowserShellView: View {
                                     web.load(url: url, in: currentId)
                                     tabManager.navigate(tab: currentId, to: url)
                                     tabManager.addNavigation(title: url.host ?? url.absoluteString, url: url)
+                                    HistoryManager.shared.recordPageVisit(url: url, title: url.host ?? url.absoluteString)
                                     addressBarText = url.absoluteString
                                     isFirstLoad = true
                                 },
-                                onOpenHistory: { showHistorySheet = true }
+                                onOpenHistory: { navigateToHistory() }
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
                                 handleURLDrop(providers: providers, action: { navigateToURL($0) })
                             }
+                        } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
+                            // Special luma://history page
+                            HistoryPageView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             ZStack {
                                 WebViewContainer(webView: web.ensureWebView(for: currentId))
@@ -281,11 +287,19 @@ struct BrowserShellView: View {
                                 ),
                                 messages: Binding(
                                     get: { tabChatHistory[currentId] ?? [] },
-                                    set: { tabChatHistory[currentId] = $0 }
+                                    set: { 
+                                        tabChatHistory[currentId] = $0
+                                        saveChatHistory()
+                                        // Record chat session in history
+                                        if $0.count > 0 {
+                                            recordChatSession(tabId: currentId, messages: $0)
+                                        }
+                                    }
                                 ),
                                 webViewWrapper: web,
                                 commandRouter: router,
-                                gemini: gemini
+                                gemini: gemini,
+                                tabId: currentId
                             ) { response in
                                 pendingAssistantText = response.text
                                 pendingAction = response.action
@@ -322,21 +336,8 @@ struct BrowserShellView: View {
                 Text("No action to execute.")
             }
         }
-        .sheet(isPresented: $showHistorySheet) {
-            HistoryView(
-                entries: tabManager.navigationHistory,
-                onSelect: { url in
-                    showHistorySheet = false
-                    if let id = tabManager.currentTab {
-                        web.load(url: url, in: id)
-                        tabManager.navigate(tab: id, to: url)
-                        addressBarText = url.absoluteString
-                    }
-                },
-                onDismiss: { showHistorySheet = false }
-            )
-        }
         .onAppear {
+            loadChatHistory()
             if tabManager.currentTab == nil {
                 _ = tabManager.newTab(url: nil)
                 if let id = tabManager.currentTab {
@@ -367,7 +368,7 @@ struct BrowserShellView: View {
                         return nil
                     }
                     if key == "y" {
-                        DispatchQueue.main.async { showHistorySheet = true }
+                        DispatchQueue.main.async { navigateToHistory() }
                         return nil
                     }
                     if key == "l" {
@@ -402,6 +403,7 @@ struct BrowserShellView: View {
             }
         }
         .onDisappear {
+            saveChatHistory()
             if let m = eventMonitor {
                 NSEvent.removeMonitor(m)
                 eventMonitor = nil
@@ -469,6 +471,12 @@ struct BrowserShellView: View {
     private func resolveToURL(_ input: String) -> URL? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        
+        // Handle luma:// scheme
+        if trimmed.lowercased().hasPrefix("luma://") {
+            return URL(string: trimmed)
+        }
+        
         if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
             return URL(string: trimmed)
         }
@@ -483,8 +491,29 @@ struct BrowserShellView: View {
         guard let url = resolveToURL(addressBarText) else { return }
         navigateToURL(url)
     }
+    
+    private func navigateToHistory() {
+        if let url = URL(string: "luma://history") {
+            navigateToURL(url)
+        }
+    }
 
     private func navigateToURL(_ url: URL) {
+        // Handle luma:// scheme
+        if url.scheme == "luma" {
+            if url.host == "history" {
+                if tabManager.currentTab == nil {
+                    let id = tabManager.newTab(url: url)
+                    tabManager.navigate(tab: id, to: url)
+                } else if let id = tabManager.currentTab {
+                    tabManager.navigate(tab: id, to: url)
+                }
+                addressBarText = url.absoluteString
+                isFirstLoad = false
+                return
+            }
+        }
+        
         let title = url.host ?? url.absoluteString
         if tabManager.currentTab == nil {
             let id = tabManager.newTab(url: url)
@@ -496,6 +525,7 @@ struct BrowserShellView: View {
             web.load(url: url, in: id)
         }
         tabManager.addNavigation(title: title, url: url)
+        HistoryManager.shared.recordPageVisit(url: url, title: title)
         addressBarText = url.absoluteString
     }
 
@@ -505,7 +535,9 @@ struct BrowserShellView: View {
         web.setActiveTab(id)
         web.load(url: url, in: id)
         tabManager.navigate(tab: id, to: url)
-        tabManager.addNavigation(title: url.host ?? url.absoluteString, url: url)
+        let title = url.host ?? url.absoluteString
+        tabManager.addNavigation(title: title, url: url)
+        HistoryManager.shared.recordPageVisit(url: url, title: title)
         addressBarText = url.absoluteString
     }
 
@@ -609,6 +641,59 @@ struct BrowserShellView: View {
             break
         }
         pendingAction = nil
+    }
+    
+    // MARK: - Chat History Persistence
+    
+    private func recordChatSession(tabId: UUID, messages: [ChatMessage]) {
+        // Only record if there are messages and it's been a meaningful conversation
+        guard messages.count >= 2 else { return }
+        
+        // Get summaries for this tab if they exist
+        let summaries = HistoryManager.shared.getSummariesForTab(tabId: tabId)
+        let combinedSummary = summaries.map { $0.summary }.joined(separator: " ")
+        
+        HistoryManager.shared.recordChatSession(
+            tabId: tabId,
+            messages: messages,
+            summary: combinedSummary.isEmpty ? nil : combinedSummary
+        )
+    }
+    
+    private func saveChatHistory() {
+        let encoder = JSONEncoder()
+        var savedHistory: [String: Data] = [:]
+        
+        for (tabId, messages) in tabChatHistory {
+            if let encoded = try? encoder.encode(messages) {
+                savedHistory[tabId.uuidString] = encoded
+            }
+        }
+        
+        // Save to UserDefaults with a size limit
+        let defaults = UserDefaults.standard
+        for (key, value) in savedHistory {
+            defaults.set(value, forKey: "chat_history_\(key)")
+        }
+    }
+    
+    private func loadChatHistory() {
+        let decoder = JSONDecoder()
+        let defaults = UserDefaults.standard
+        
+        // Get all keys that match our chat history pattern
+        let allKeys = defaults.dictionaryRepresentation().keys
+        let chatKeys = allKeys.filter { $0.hasPrefix("chat_history_") }
+        
+        for key in chatKeys {
+            let uuidString = key.replacingOccurrences(of: "chat_history_", with: "")
+            guard let uuid = UUID(uuidString: uuidString),
+                  let data = defaults.data(forKey: key),
+                  let messages = try? decoder.decode([ChatMessage].self, from: data) else {
+                continue
+            }
+            tabChatHistory[uuid] = messages
+        }
     }
 }
 
