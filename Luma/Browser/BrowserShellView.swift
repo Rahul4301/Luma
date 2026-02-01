@@ -42,147 +42,109 @@ struct BrowserShellView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    // Address bar row + suggestions (suggestions below, not overlapping)
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: 6) {
-                            // Nav buttons (rounded)
-                            HStack(spacing: 2) {
-                                Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                                    Image(systemName: "chevron.left")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Back")
-
-                                Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Forward")
-
-                                Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Reload")
-                            }
-
-                            // Omnibox (search bar only)
-                            HStack(spacing: 8) {
-                                Image(systemName: "globe")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.secondary)
-
-                                TextField("Search or enter website name", text: $addressBarText)
-                                    .textFieldStyle(.plain)
-                                    .focused($addressBarFocused)
-                                    .onSubmit {
-                                        searchSuggestions = []
-                                        navigateFromAddressBar()
-                                    }
-                                    .onChange(of: addressBarText) { _, newValue in
-                                        fetchSearchSuggestions(for: newValue)
-                                    }
-                                    .onChange(of: addressBarFocused) { _, focused in
-                                        if !focused { searchSuggestions = [] }
-                                    }
-
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(Color(white: 0.18))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
-                            )
-                            .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
-                            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
-                                handleURLDrop(providers: providers) { url in
-                                    addressBarText = url.absoluteString
-                                    navigateToURL(url)
-                                }
-                            }
-
-                            // Chat pill button (Chrome-style)
-                            Button(action: toggleAIPanel) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "bubble.left.and.bubble.right")
-                                        .font(.system(size: 10, weight: .medium))
-                                    Text("Chat")
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .fill(Color(white: 0.22).opacity(0.8))
-                                )
+                    // Address bar row (layout flow only - fixed height)
+                    HStack(spacing: 6) {
+                        // Nav buttons (rounded)
+                        HStack(spacing: 2) {
+                            Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Toggle AI panel")
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .frame(height: addressBarHeight)
-                        .frame(maxWidth: .infinity)
-                        .padding(chromePadding)
-                        .background(
-                            tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
-                                ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
-                                : AnyView(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
-                        )
+                            .accessibilityLabel("Back")
 
-                        // Search suggestions dropdown (below the search bar, not overlapping)
-                        if addressBarFocused, !searchSuggestions.isEmpty {
-                            VStack(spacing: 0) {
-                                ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
-                                    Button(action: {
-                                        addressBarText = suggestion
-                                        searchSuggestions = []
-                                        navigateFromAddressBar()
-                                    }) {
-                                        HStack {
-                                            Image(systemName: "magnifyingglass")
-                                                .font(.system(size: 11))
-                                                .foregroundStyle(.secondary)
-                                                .frame(width: 20)
-                                            Text(suggestion)
-                                                .font(.system(size: 13))
-                                                .foregroundStyle(.primary)
-                                                .lineLimit(1)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
+                            Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                             }
-                            .background(Color(nsColor: .windowBackgroundColor))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .shadow(color: .black.opacity(0.15), radius: 8)
-                            .padding(.horizontal, 12)
-                            .padding(.top, 4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Forward")
+
+                            Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Reload")
                         }
+
+                        // Omnibox (search bar only)
+                        HStack(spacing: 8) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+
+                            TextField("Search or enter website name", text: $addressBarText)
+                                .textFieldStyle(.plain)
+                                .focused($addressBarFocused)
+                                .onSubmit {
+                                    searchSuggestions = []
+                                    navigateFromAddressBar()
+                                }
+                                .onChange(of: addressBarText) { _, newValue in
+                                    fetchSearchSuggestions(for: newValue)
+                                }
+                                .onChange(of: addressBarFocused) { _, focused in
+                                    if !focused { searchSuggestions = [] }
+                                }
+
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color(white: 0.18))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
+                        )
+                        .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
+                        .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                            handleURLDrop(providers: providers) { url in
+                                addressBarText = url.absoluteString
+                                navigateToURL(url)
+                            }
+                        }
+
+                        // Chat pill button (Chrome-style)
+                        Button(action: toggleAIPanel) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bubble.left.and.bubble.right")
+                                    .font(.system(size: 10, weight: .medium))
+                                Text("Chat")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(white: 0.22).opacity(0.8))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Toggle AI panel")
                     }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .frame(height: addressBarHeight)
+                    .frame(maxWidth: .infinity)
+                    .padding(chromePadding)
+                    .background(
+                        tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
+                            ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
+                            : AnyView(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
+                    )
 
                     if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil {
                         HairlineDivider(opacity: 0.15)
@@ -233,6 +195,45 @@ struct BrowserShellView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
+                .overlay(alignment: .topLeading) {
+                    // Search suggestions overlay (absolutely positioned, does not affect layout)
+                    if addressBarFocused, !searchSuggestions.isEmpty {
+                        VStack(spacing: 0) {
+                            ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
+                                Button(action: {
+                                    addressBarText = suggestion
+                                    searchSuggestions = []
+                                    navigateFromAddressBar()
+                                }) {
+                                    HStack {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 20)
+                                        Text(suggestion)
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .background(Color(nsColor: .windowBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .shadow(color: .black.opacity(0.15), radius: 8)
+                        .padding(.top, addressBarHeight + chromePadding + 6)
+                        // Nav buttons: 28+28+28 = 84pt, spacing: 2+6 = 8pt, outer padding: 6+6 = 12pt
+                        .padding(.leading, chromePadding + 6 + 84 + 8)
+                        // Width matches search bar: available width minus nav section minus chat button and spacing
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                }
 
                 if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
                     HStack(spacing: 0) {
