@@ -42,6 +42,25 @@ struct BrowserShellView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
+                    // Custom titlebar/tab strip
+                    TabStripView(
+                        tabManager: tabManager,
+                        contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
+                            ? Color(white: 0.13)
+                            : Color(nsColor: .windowBackgroundColor),
+                        onSwitch: { switchToTab($0) },
+                        onClose: { closeTab($0) },
+                        onNewTab: newTab,
+                        onDropURLForNewTab: { newTabWithURL($0) }
+                    )
+                    .frame(height: 38)
+                    .background(
+                        WindowDragView()
+                    )
+
+                    Divider()
+                        .opacity(0.2)
+
                     // Address bar row (layout flow only - fixed height)
                     HStack(spacing: 6) {
                         // Nav buttons (rounded)
@@ -264,22 +283,6 @@ struct BrowserShellView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                TabStripView(
-                    tabManager: tabManager,
-                    contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
-                        ? Color(white: 0.13)
-                        : Color(nsColor: .windowBackgroundColor),
-                    onSwitch: { switchToTab($0) },
-                    onClose: { closeTab($0) },
-                    onNewTab: newTab,
-                    onDropURLForNewTab: { newTabWithURL($0) }
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .toolbarBackground(.visible, for: .windowToolbar)
         .alert("Confirm Action", isPresented: $showActionConfirm) {
             Button("Cancel", role: .cancel) { pendingAction = nil }
             Button("Execute") { executePendingAction() }
@@ -847,9 +850,9 @@ private struct TabStripView: View {
     private let rowHeight: CGFloat = 30
 
     var body: some View {
-        GeometryReader { geo in
+        HStack(spacing: 0) {
             let count = tabManager.tabCount()
-            let tabWidth: CGFloat = count > 0 ? max(90, (geo.size.width - 59) / CGFloat(count)) : 0
+            let tabWidth: CGFloat = count > 0 ? max(90, 180) : 0
 
             HStack(spacing: 0) {
                 ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
@@ -879,10 +882,13 @@ private struct TabStripView: View {
                 .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
                     urlDropHandler(providers: providers)
                 }
+
+                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 80)
+            .padding(.trailing, 8)
         }
-        .frame(height: rowHeight)
+        .frame(maxWidth: .infinity)
         .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
             urlDropHandler(providers: providers)
         }
@@ -991,6 +997,18 @@ struct WebViewContainer: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView { webView }
     func updateNSView(_ nsView: WKWebView, context: Context) {}
+}
+
+struct WindowDragView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            view.window?.isMovableByWindowBackground = true
+        }
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 #Preview {
