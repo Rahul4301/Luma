@@ -16,6 +16,7 @@ struct CommandSurfaceView: View {
     let gemini: GeminiClient
     let onActionProposed: (LLMResponse) -> Void
 
+    @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSizeRaw: Int = 13
     @State private var inputText: String = ""
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
@@ -23,6 +24,7 @@ struct CommandSurfaceView: View {
     @State private var includeSelection: Bool = false
     @State private var selectedText: String? = nil
     @State private var whatWillBeSentExpanded: Bool = false
+    @FocusState private var isInputFocused: Bool
 
     // Auto-loaded page context
     @State private var pageTitle: String? = nil
@@ -30,55 +32,66 @@ struct CommandSurfaceView: View {
     @State private var isLoadingContext: Bool = false
     @State private var contextRefreshTimer: Timer? = nil
 
-    private let accent = Color.accentColor
+    private let panelBg = Color.black
+    private let textPrimary = Color.white
+    private let textSecondary = Color.white.opacity(0.6)
+    /// Xcode AI assistant-style glow: cyan when active, subtle when idle
+    private let glowColorActive = Color(red: 0.35, green: 0.75, blue: 1.0)
+    private let glowColorDim = Color(red: 0.3, green: 0.6, blue: 0.9).opacity(0.15)
+
+    private var chatFontSize: CGFloat { CGFloat(aiPanelFontSizeRaw) }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header: Luma + status dot + optional Settings + close (small, calm)
+            // Header: ChatGPT-style minimal (Luma + status + close)
             HStack(spacing: 8) {
                 Text("Luma")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(textPrimary)
                 statusDotView()
                 if KeychainManager.shared.fetchGeminiKey() == nil || GeminiClient.lastNetworkError != nil {
-                    SettingsLink { Text("Settings").font(.caption2).foregroundStyle(.secondary) }
+                    SettingsLink { Text("Settings").font(.caption2).foregroundColor(textSecondary) }
                         .buttonStyle(.plain)
                 }
                 Spacer()
                 Button(action: close) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(textSecondary)
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(panelBg)
 
             // Collapsible "What will be sent" (off by default)
             DisclosureGroup(isExpanded: $whatWillBeSentExpanded) {
                 contextPreviewContent()
                     .font(.system(size: 11))
+                    .foregroundColor(textSecondary)
                     .padding(.top, 4)
             } label: {
                 Text("What will be sent")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(textSecondary)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 6)
-            .background(.ultraThinMaterial.opacity(0.6))
+            .background(panelBg)
+            .tint(textSecondary)
 
-            // Chat history (scrollable, smaller font)
+            // Chat history: plain free-form text (no bubbles)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 20) {
                         ForEach(messages) { msg in
-                            ChatBubble(message: msg, isUser: msg.role == .user)
+                            ChatBubble(message: msg, isUser: msg.role == .user, fontSize: chatFontSize)
                         }
                     }
-                    .padding(12)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: messages.count) { _, _ in
@@ -89,24 +102,35 @@ struct CommandSurfaceView: View {
                     }
                 }
             }
+            .background(panelBg)
 
-            // Input area: small multi-line (up to 4 lines) + paper plane + toggles
-            VStack(spacing: 6) {
+            // Input area: ChatGPT-style with Xcode AI assistant glow
+            VStack(spacing: 8) {
                 HStack(alignment: .bottom, spacing: 8) {
+                    let isGlowActive = isInputFocused || !inputText.isEmpty
                     GrowingTextEditor(
                         text: $inputText,
-                        placeholder: "Message...",
-                        minHeight: 32
+                        placeholder: "Message Luma...",
+                        minHeight: 36,
+                        fontSize: chatFontSize,
+                        isFocused: $isInputFocused
                     )
-                    .padding(8)
+                    .padding(10)
                     .frame(maxHeight: 80)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .background(Color(white: 0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isGlowActive ? glowColorActive : glowColorDim, lineWidth: isGlowActive ? 2 : 1)
+                    )
+                    .shadow(color: isGlowActive ? glowColorActive.opacity(0.6) : glowColorDim.opacity(0.3), radius: isGlowActive ? 12 : 4)
+                    .shadow(color: isGlowActive ? glowColorActive.opacity(0.3) : .clear, radius: isGlowActive ? 24 : 0)
+                    .animation(.easeInOut(duration: 0.12), value: isGlowActive)
 
                     Button(action: sendCommand) {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(inputText.isEmpty ? .secondary.opacity(0.5) : accent)
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(inputText.isEmpty ? textSecondary.opacity(0.4) : textPrimary)
                     }
                     .buttonStyle(.plain)
                     .disabled(inputText.isEmpty || isSending)
@@ -118,9 +142,10 @@ struct CommandSurfaceView: View {
                     Toggle(isOn: $includeSelection) {
                         Text("Include selection")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(textSecondary)
                     }
                     .toggleStyle(.checkbox)
+                    .tint(textSecondary)
                     .onChange(of: includeSelection) { _, on in
                         if on { fetchSelectedText() }
                         else { selectedText = nil }
@@ -129,21 +154,21 @@ struct CommandSurfaceView: View {
                     if let msg = actionProposedMessage {
                         Text(msg)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(textSecondary)
                     }
                     if let err = errorMessage {
                         Text(err)
                             .font(.caption2)
-                            .foregroundColor(.red)
+                            .foregroundColor(.red.opacity(0.9))
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
             }
             .padding(12)
-            .background(.ultraThinMaterial)
+            .background(panelBg)
         }
-        .background(.regularMaterial)
+        .background(panelBg)
         .onAppear {
             loadPageContext()
             startContextRefreshTimer()
@@ -180,19 +205,31 @@ struct CommandSurfaceView: View {
     private struct ChatBubble: View {
         let message: ChatMessage
         let isUser: Bool
+        let fontSize: CGFloat
 
         var body: some View {
-            HStack {
+            HStack(alignment: .top, spacing: 0) {
                 if isUser { Spacer(minLength: 32) }
-                Text(message.text)
-                    .font(.system(size: 12))
-                    .foregroundColor(isUser ? .white : .primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(isUser ? Color.accentColor : Color.primary.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                messageTextView
+                    .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
                 if !isUser { Spacer(minLength: 32) }
             }
+        }
+
+        @ViewBuilder
+        private var messageTextView: some View {
+            Group {
+                if let attributed = try? AttributedString(markdown: message.text) {
+                    Text(attributed)
+                } else {
+                    Text(message.text)
+                }
+            }
+            .font(.system(size: fontSize))
+            .foregroundColor(.white)
+            .textSelection(.enabled)
+            .multilineTextAlignment(isUser ? .trailing : .leading)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -207,23 +244,28 @@ struct CommandSurfaceView: View {
         VStack(alignment: .leading, spacing: 4) {
             if let url = webViewWrapper.currentURL {
                 Text("URL: \(url.absoluteString)")
+                    .foregroundColor(Color.white.opacity(0.7))
                     .lineLimit(1)
             }
             if let title = pageTitle, !title.isEmpty {
                 Text("Title: \(title)")
+                    .foregroundColor(Color.white.opacity(0.7))
                     .lineLimit(1)
             }
             if let text = pageText, !text.isEmpty {
                 Text("Page: \(text.prefix(200))\(text.count > 200 ? "…" : "")")
+                    .foregroundColor(Color.white.opacity(0.7))
                     .lineLimit(3)
             }
             if includeSelection, let sel = selectedText, !sel.isEmpty {
                 Text("Selection: \(sel.prefix(100))\(sel.count > 100 ? "…" : "")")
+                    .foregroundColor(Color.white.opacity(0.7))
                     .lineLimit(2)
             }
             if isLoadingContext {
                 ProgressView()
                     .scaleEffect(0.6)
+                    .tint(.white)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -358,11 +400,15 @@ private struct GrowingTextEditor: View {
     @Binding var text: String
     var placeholder: String
     var minHeight: CGFloat
+    var fontSize: CGFloat = 13
+    @FocusState.Binding var isFocused: Bool
 
     /// Height from content; no upper bound so the whole query is visible.
     @State private var contentHeight: CGFloat = 36
 
-    private let font = Font.system(size: 13)
+    private var font: Font { Font.system(size: fontSize) }
+    private let textColor = Color.white
+    private let placeholderColor = Color.white.opacity(0.4)
 
     private var boxHeight: CGFloat {
         max(minHeight, contentHeight)
@@ -373,6 +419,7 @@ private struct GrowingTextEditor: View {
             // Measure content height using invisible text (opacity 0 so no double-text overlay)
             Text(text.isEmpty ? " " : text)
                 .font(font)
+                .foregroundColor(textColor)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(8)
@@ -386,15 +433,17 @@ private struct GrowingTextEditor: View {
 
             TextEditor(text: $text)
                 .font(font)
+                .foregroundColor(textColor)
                 .scrollContentBackground(.hidden)
                 .padding(4)
                 .frame(minHeight: minHeight, maxHeight: .infinity)
                 .frame(height: boxHeight)
+                .focused($isFocused)
 
             if text.isEmpty {
                 Text(placeholder)
                     .font(font)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(placeholderColor)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .frame(height: boxHeight)

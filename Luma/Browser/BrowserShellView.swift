@@ -3,6 +3,7 @@ import SwiftUI
 import WebKit
 import AppKit
 import Combine
+import UniformTypeIdentifiers
 
 /// Minimal browser shell hosting WKWebViews via WebViewWrapper and TabManager.
 ///
@@ -20,6 +21,7 @@ struct BrowserShellView: View {
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
+    @State private var showHistorySheet: Bool = false
     @State private var restoreAddressBarOnEscape: Bool = false
     @State private var isFirstLoad: Bool = true
     @FocusState private var addressBarFocused: Bool
@@ -31,8 +33,6 @@ struct BrowserShellView: View {
     private let chromeCornerRadius: CGFloat = 14
     private let chromePadding: CGFloat = 6
 
-    private static let historyURL = URL(string: "luma://history")!
-
     var body: some View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
@@ -40,108 +40,95 @@ struct BrowserShellView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    // Chrome: tabs + address bar (content area — visible and clickable)
-                    VStack(spacing: 0) {
-                        TabStripView(
-                            tabManager: tabManager,
-                            contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
-                                ? Color(white: 0.13)
-                                : Color(nsColor: .windowBackgroundColor),
-                            onSwitch: { switchToTab($0) },
-                            onClose: { closeTab($0) },
-                            onNewTab: newTab
-                        )
-                        .padding(.leading, 8)
-                        .padding(.trailing, chromePadding)
-                        .padding(.top, 6)
-                        .padding(.bottom, 2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        // Address bar row (Chrome-style omnibox)
-                        HStack(spacing: 6) {
-                            // Nav buttons (rounded)
-                            HStack(spacing: 2) {
-                                Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                                    Image(systemName: "chevron.left")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Back")
-
-                                Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Forward")
-
-                                Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Reload")
-                            }
-
-                            // Omnibox (Chrome-style: icon left, large field, magnifier right, focus ring)
-                            HStack(spacing: 8) {
-                                Image(systemName: "globe")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.secondary)
-
-                                TextField("Search or enter website name", text: $addressBarText)
-                                    .textFieldStyle(.plain)
-                                    .focused($addressBarFocused)
-                                    .onSubmit { navigateFromAddressBar() }
-
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(Color(white: 0.18))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
-                            )
-                            .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
-
-                            // Chat pill button (Chrome-style)
-                            Button(action: toggleAIPanel) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "bubble.left.and.bubble.right")
-                                        .font(.system(size: 10, weight: .medium))
-                                    Text("Chat")
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .fill(Color(white: 0.22).opacity(0.8))
-                                )
+                    // Address bar row (Chrome-style omnibox)
+                    HStack(spacing: 6) {
+                        // Nav buttons (rounded)
+                        HStack(spacing: 2) {
+                            Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Toggle AI panel")
+                            .accessibilityLabel("Back")
+
+                            Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                             }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 4)
-                            .frame(height: addressBarHeight)
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, chromePadding)
-                            .padding(.bottom, chromePadding)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Forward")
+
+                            Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 28, height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Reload")
+                        }
+
+                        // Omnibox (Chrome-style: icon left, large field, magnifier right, focus ring)
+                        HStack(spacing: 8) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+
+                            TextField("Search or enter website name", text: $addressBarText)
+                                .textFieldStyle(.plain)
+                                .focused($addressBarFocused)
+                                .onSubmit { navigateFromAddressBar() }
+
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color(white: 0.18))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
+                        )
+                        .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
+                        .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                            handleURLDrop(providers: providers) { url in
+                                addressBarText = url.absoluteString
+                                navigateToURL(url)
+                            }
+                        }
+
+                        // Chat pill button (Chrome-style)
+                        Button(action: toggleAIPanel) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bubble.left.and.bubble.right")
+                                    .font(.system(size: 10, weight: .medium))
+                                Text("Chat")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(white: 0.22).opacity(0.8))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Toggle AI panel")
                     }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .frame(height: addressBarHeight)
+                    .frame(maxWidth: .infinity)
+                    .padding(chromePadding)
                     .background(
                         tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
                             ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
@@ -152,18 +139,10 @@ struct BrowserShellView: View {
                         HairlineDivider(opacity: 0.15)
                     }
 
-                    // Web content, start page, or History tab
+                    // Web content or start page
                     if let currentId = tabManager.currentTab {
-                        let tabURL = tabManager.tabURL[currentId] ?? nil
-                        let isHistoryTab = tabURL == Self.historyURL
-                        let isStartPage = tabURL == nil
-                        if isHistoryTab {
-                            HistoryTabView(
-                                entries: tabManager.navigationHistory,
-                                onSelect: { url in openURLFromHistory(url) }
-                            )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if isStartPage {
+                        let tabHasURL = (tabManager.tabURL[currentId] ?? nil) != nil
+                        if !tabHasURL {
                             StartPageView(
                                 entries: tabManager.navigationHistory,
                                 onSelect: { url in
@@ -175,10 +154,13 @@ struct BrowserShellView: View {
                                     addressBarText = url.absoluteString
                                     isFirstLoad = true
                                 },
-                                onOpenHistory: { openHistoryTab() }
+                                onOpenHistory: { showHistorySheet = true }
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if let url = tabURL {
+                            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                                handleURLDrop(providers: providers, action: { navigateToURL($0) })
+                            }
+                        } else {
                             ZStack {
                                 WebViewContainer(webView: web.ensureWebView(for: currentId))
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -190,9 +172,9 @@ struct BrowserShellView: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            Color(nsColor: .windowBackgroundColor)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                                handleURLDrop(providers: providers, action: { navigateToURL($0) })
+                            }
                         }
                     } else {
                         Color(nsColor: .windowBackgroundColor)
@@ -201,7 +183,7 @@ struct BrowserShellView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .animation(.easeInOut(duration: 0.18), value: tabManager.currentTab)
+                .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
 
                 if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
                     HStack(spacing: 0) {
@@ -225,14 +207,29 @@ struct BrowserShellView: View {
                             showActionConfirm = (response.action != nil)
                         }
                         .frame(width: aiPanelWidth)
-                        .background(GlassBackground(material: .hudWindow, cornerRadius: 16, padding: 0, shadowOpacity: 0.08))
-                        .shadow(color: .black.opacity(0.12), radius: 12, x: -4, y: 0)
+                        .background(Color.black)
                     }
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
-                    .animation(.easeInOut(duration: 0.18), value: tabsWithPanelOpen.contains(currentId))
+                    .animation(.easeInOut(duration: 0.1), value: tabsWithPanelOpen.contains(currentId))
                 }
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                TabStripView(
+                    tabManager: tabManager,
+                    contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
+                        ? Color(white: 0.13)
+                        : Color(nsColor: .windowBackgroundColor),
+                    onSwitch: { switchToTab($0) },
+                    onClose: { closeTab($0) },
+                    onNewTab: newTab,
+                    onDropURLForNewTab: { newTabWithURL($0) }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .toolbarBackground(.visible, for: .windowToolbar)
         .alert("Confirm Action", isPresented: $showActionConfirm) {
             Button("Cancel", role: .cancel) { pendingAction = nil }
             Button("Execute") { executePendingAction() }
@@ -245,6 +242,20 @@ struct BrowserShellView: View {
             } else {
                 Text("No action to execute.")
             }
+        }
+        .sheet(isPresented: $showHistorySheet) {
+            HistoryView(
+                entries: tabManager.navigationHistory,
+                onSelect: { url in
+                    showHistorySheet = false
+                    if let id = tabManager.currentTab {
+                        web.load(url: url, in: id)
+                        tabManager.navigate(tab: id, to: url)
+                        addressBarText = url.absoluteString
+                    }
+                },
+                onDismiss: { showHistorySheet = false }
+            )
         }
         .onAppear {
             if tabManager.currentTab == nil {
@@ -277,7 +288,7 @@ struct BrowserShellView: View {
                         return nil
                     }
                     if key == "y" {
-                        DispatchQueue.main.async { openHistoryTab() }
+                        DispatchQueue.main.async { showHistorySheet = true }
                         return nil
                     }
                     if key == "l" {
@@ -322,9 +333,7 @@ struct BrowserShellView: View {
 
     private func syncAddressBarFromCurrentTab() {
         if let id = tabManager.currentTab {
-            if tabManager.tabURL[id] == Self.historyURL {
-                addressBarText = ""
-            } else if let url = web.currentURL {
+            if let url = web.currentURL {
                 addressBarText = url.absoluteString
                 tabManager.navigate(tab: id, to: url)
             } else if let url = tabManager.tabURL[id] ?? nil {
@@ -357,22 +366,61 @@ struct BrowserShellView: View {
     /// Navigate from address bar (Enter/Return). Uses omnibox rules; no navigation until Enter.
     private func navigateFromAddressBar() {
         guard let url = resolveToURL(addressBarText) else { return }
+        navigateToURL(url)
+    }
 
+    /// Navigate current tab (or create one) to the given URL. Used by address bar and drag-drop.
+    private func navigateToURL(_ url: URL) {
         let title = url.host ?? url.absoluteString
         if tabManager.currentTab == nil {
             let id = tabManager.newTab(url: url)
             _ = web.ensureWebView(for: id)
             web.setActiveTab(id)
             web.load(url: url, in: id)
-        } else if tabManager.tabURL[tabManager.currentTab!] == Self.historyURL {
-            openURLFromHistory(url)
-            return
         } else if let id = tabManager.currentTab {
             tabManager.navigate(tab: id, to: url)
             web.load(url: url, in: id)
         }
         tabManager.addNavigation(title: title, url: url)
         addressBarText = url.absoluteString
+    }
+
+    /// Creates a new tab and navigates to the given URL. Used by drag-drop on tab strip.
+    private func newTabWithURL(_ url: URL) {
+        let id = tabManager.newTab(url: url)
+        _ = web.ensureWebView(for: id)
+        web.setActiveTab(id)
+        web.load(url: url, in: id)
+        tabManager.navigate(tab: id, to: url)
+        tabManager.addNavigation(title: url.host ?? url.absoluteString, url: url)
+        addressBarText = url.absoluteString
+    }
+
+    /// Extracts URL from drop providers (links, file URLs, plain text). Calls action on main queue when URL is found.
+    private func handleURLDrop(providers: [NSItemProvider], action: @escaping (URL) -> Void) -> Bool {
+        guard let provider = providers.first else { return false }
+        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let u = url, (u.scheme == "http" || u.scheme == "https" || u.scheme == "file") {
+                    DispatchQueue.main.async { action(u) }
+                }
+            }
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let u = url {
+                    DispatchQueue.main.async { action(u) }
+                }
+            }
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+            _ = provider.loadObject(ofClass: String.self) { str, _ in
+                if let s = str?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   let u = URL(string: s),
+                   u.scheme == "http" || u.scheme == "https" {
+                    DispatchQueue.main.async { action(u) }
+                }
+            }
+        }
+        return true
     }
 
     private func toggleAIPanel() {
@@ -390,24 +438,6 @@ struct BrowserShellView: View {
         web.setActiveTab(id)
         addressBarText = ""
         addressBarFocused = true
-    }
-
-    /// Opens history in a new tab titled "History".
-    private func openHistoryTab() {
-        let id = tabManager.newTab(url: Self.historyURL)
-        web.setActiveTab(id)
-        addressBarText = ""
-        syncAddressBarFromCurrentTab()
-    }
-
-    /// Opens a URL from the history tab in a new tab and switches to it.
-    private func openURLFromHistory(_ url: URL) {
-        let id = tabManager.newTab(url: url)
-        _ = web.ensureWebView(for: id)
-        web.setActiveTab(id)
-        web.load(url: url, in: id)
-        tabManager.navigate(tab: id, to: url)
-        addressBarText = url.absoluteString
     }
 
     private func closeCurrentTab() {
@@ -618,11 +648,12 @@ private struct RecentCard: View {
     }
 }
 
-// MARK: - History tab (Cmd+Y opens in new tab)
+// MARK: - History sheet (Cmd+Y)
 
-private struct HistoryTabView: View {
+private struct HistoryView: View {
     let entries: [HistoryEntry]
     let onSelect: (URL) -> Void
+    let onDismiss: () -> Void
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -632,116 +663,48 @@ private struct HistoryTabView: View {
     }()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
+            HStack {
                 Text("History")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 24)
-                    .padding(.bottom, 16)
+                    .font(.headline)
+                Spacer()
+                Button("Done", action: onDismiss)
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
+            .padding()
 
-                if entries.isEmpty {
-                    Text("No history yet")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 48)
-                } else {
-                    LazyVStack(spacing: 0) {
-                        ForEach(entries) { entry in
-                            HistoryEntryRow(entry: entry, onSelect: onSelect)
+            Divider()
+
+            if entries.isEmpty {
+                Text("No history yet")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(entries) { entry in
+                    Button {
+                        onSelect(entry.url)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title)
+                                .lineLimit(1)
+                                .font(.system(size: 13, weight: .medium))
+                            Text(entry.url.absoluteString)
+                                .lineLimit(1)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(Self.dateFormatter.string(from: entry.date))
+                                .font(.caption2)
+                                .foregroundColor(.secondary.opacity(0.8))
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
+                    .buttonStyle(.plain)
                 }
+                .listStyle(.plain)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-}
-
-private struct HistoryEntryRow: View {
-    let entry: HistoryEntry
-    let onSelect: (URL) -> Void
-
-    @State private var isHovered = false
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .short
-        f.timeStyle = .short
-        return f
-    }()
-
-    private var isSearch: Bool {
-        let host = entry.url.host?.lowercased() ?? ""
-        return (host.contains("google") || host.contains("bing") || host.contains("duckduckgo"))
-            && (entry.url.path.contains("/search") || entry.url.path == "/")
-    }
-
-    private var searchQuery: String? {
-        guard isSearch else { return nil }
-        let components = URLComponents(url: entry.url, resolvingAgainstBaseURL: false)
-        return components?.queryItems?.first(where: { $0.name == "q" })?.value?.removingPercentEncoding
-    }
-
-    private var displayTitle: String {
-        if let q = searchQuery, !q.isEmpty { return q }
-        return entry.title
-    }
-
-    private var subtitle: String {
-        if isSearch {
-            let host = entry.url.host ?? "search"
-            if host.contains("google") { return "Google search" }
-            if host.contains("bing") { return "Bing search" }
-            if host.contains("duckduckgo") { return "DuckDuckGo search" }
-            return "Search"
-        }
-        return entry.url.host ?? entry.url.absoluteString
-    }
-
-    var body: some View {
-        Button {
-            onSelect(entry.url)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: isSearch ? "magnifyingglass" : "globe")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-                    .background(Color.secondary.opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(displayTitle)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    Text(Self.dateFormatter.string(from: entry.date))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary.opacity(0.8))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary.opacity(0.6))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.primary.opacity(isHovered ? 0.06 : 0))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        .frame(minWidth: 400, minHeight: 300)
     }
 }
 
@@ -782,19 +745,20 @@ private struct PanelResizeHandle: View {
 
 // MARK: - Tab strip (titlebar, leading-aligned)
 
-struct TabStripView: View {
+private struct TabStripView: View {
     @ObservedObject var tabManager: TabManager
     let contentAreaColor: Color
     let onSwitch: (UUID) -> Void
     let onClose: (UUID) -> Void
     let onNewTab: () -> Void
+    let onDropURLForNewTab: (URL) -> Void
 
     private let rowHeight: CGFloat = 30
 
     var body: some View {
         GeometryReader { geo in
             let count = tabManager.tabCount()
-            let tabWidth: CGFloat = count > 0 ? max(90, (geo.size.width - 44) / CGFloat(count)) : 0
+            let tabWidth: CGFloat = count > 0 ? max(90, (geo.size.width - 59) / CGFloat(count)) : 0
 
             HStack(spacing: 0) {
                 ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
@@ -815,16 +779,48 @@ struct TabStripView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 36, height: rowHeight)
+                        .frame(width: 32, height: rowHeight - 4)
                         .contentShape(Rectangle())
                         .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("New tab")
+                .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                    urlDropHandler(providers: providers)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(height: rowHeight)
+        .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+            urlDropHandler(providers: providers)
+        }
+    }
+
+    private func urlDropHandler(providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let u = url, (u.scheme == "http" || u.scheme == "https" || u.scheme == "file") {
+                    DispatchQueue.main.async { onDropURLForNewTab(u) }
+                }
+            }
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let u = url {
+                    DispatchQueue.main.async { onDropURLForNewTab(u) }
+                }
+            }
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+            _ = provider.loadObject(ofClass: String.self) { str, _ in
+                if let s = str?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   let u = URL(string: s),
+                   u.scheme == "http" || u.scheme == "https" {
+                    DispatchQueue.main.async { onDropURLForNewTab(u) }
+                }
+            }
+        }
+        return true
     }
 }
 
@@ -840,18 +836,15 @@ private struct TabPill: View {
     @State private var isHovered = false
 
     private var title: String {
-        if let u = url, u.scheme == "luma", u.host == "history" { return "History" }
-        return url?.host ?? url?.absoluteString ?? "New Tab"
+        url?.host ?? url?.absoluteString ?? "New Tab"
     }
 
     private var leadingIcon: String {
-        if let u = url, u.scheme == "luma", u.host == "history" { return "clock" }
-        return url == nil ? "globe" : "doc.text"
+        url == nil ? "globe" : "doc.text"
     }
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            // Tab body — clicking switches to this tab
             Button(action: onSelect) {
                 HStack(spacing: 6) {
                     Image(systemName: leadingIcon)
@@ -867,23 +860,21 @@ private struct TabPill: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.leading, 8)
-                .padding(.trailing, 28)
+                .padding(.trailing, 24)
                 .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            // Close button — always visible, clickable
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
+                    .foregroundColor(.secondary)
+                    .frame(width: 16, height: 16)
             }
             .buttonStyle(.plain)
-            .opacity(isHovered || isActive ? 1 : 0.6)
+            .opacity(isHovered || isActive ? 1 : 0)
+            .allowsHitTesting(isHovered || isActive)
             .padding(.trailing, 6)
             .accessibilityLabel("Close tab")
         }

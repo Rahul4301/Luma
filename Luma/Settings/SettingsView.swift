@@ -5,9 +5,11 @@ import AppKit
 
 /// Settings view for API key management.
 ///
-/// Per SRS F5: Settings UI for AI enable/disable, Gemini API key input.
+/// Per SRS F5: Settings UI for Gemini API key input (BYO).
+/// No sign-in or account required—API key is stored locally in Keychain.
 /// Per SECURITY.md: Keys handled via KeychainManager only; UI never stores tokens directly.
 struct SettingsView: View {
+    @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSizeRaw: Int = 13
     @State private var keyInput: String = ""
     @State private var statusText: String = ""
     @State private var hasKey: Bool = false
@@ -19,12 +21,29 @@ struct SettingsView: View {
                 .font(.largeTitle)
                 .padding(.bottom)
             
+            // AI Panel Text Size
+            VStack(alignment: .leading, spacing: 12) {
+                Text("AI Panel Text Size")
+                    .font(.headline)
+                Picker("", selection: $aiPanelFontSizeRaw) {
+                    Text("Small (11)").tag(11)
+                    Text("Medium (13)").tag(13)
+                    Text("Large (15)").tag(15)
+                    Text("Extra Large (17)").tag(17)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(8)
+            
             // Gemini API Key Section
             VStack(alignment: .leading, spacing: 12) {
                 Text("Gemini API Key (BYO)")
                     .font(.headline)
                 
-                Text("Enter your Gemini API key. It will be stored securely in Keychain.")
+                Text("No account required. Enter your Gemini API key—it will be stored securely in Keychain.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 
@@ -63,7 +82,7 @@ struct SettingsView: View {
             Spacer()
         }
         .padding()
-        .frame(width: 500, height: 400)
+        .frame(width: 500, height: 480)
         .onAppear(perform: loadKeyStatus)
     }
     

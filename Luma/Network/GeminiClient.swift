@@ -67,24 +67,34 @@ final class GeminiClient {
             return
         }
         
-        // Build request body
-        var contents: [[String: Any]] = []
-        
-        // Add context first if provided
+        // Build request body: user's question first, context as reference
+        let userMessage: String
         if let context = context, !context.isEmpty {
-            contents.append([
-                "role": "user",
-                "parts": [["text": context]]
-            ])
-        }
-        
-        // Add user prompt
-        contents.append([
-            "role": "user",
-            "parts": [["text": prompt]]
-        ])
+            userMessage = """
+            The user asks: \(prompt)
 
-        let systemInstruction = "Respond in plain text only. Do not use markdown formatting such as **bold**, *italic*, or # headers. Use normal lettering.Rememeber to be concise. responses should be no longer that 400 charachters unless the user asks for a deeper explaantion"
+            Use the following page context to answer (do not simply echo it back—summarize, explain, or respond to the question):
+
+            \(context)
+            """
+        } else {
+            userMessage = prompt
+        }
+
+        let contents: [[String: Any]] = [
+            [
+                "role": "user",
+                "parts": [["text": userMessage]]
+            ]
+        ]
+
+        let systemInstruction = """
+        You are a helpful browser assistant. The user asks questions about the page they are viewing.
+        Use the provided page context to answer their question. Do NOT copy or echo back the context verbatim.
+        Summarize, explain, or respond to what they asked—don't just repeat the page content.
+        Respond naturally with full, free-form text. You may use markdown when it helps clarity.
+        Provide complete, detailed answers when appropriate—no arbitrary length limits.
+        """
 
         var requestBody: [String: Any] = [
             "contents": contents
@@ -148,9 +158,13 @@ final class GeminiClient {
                           let candidates = json["candidates"] as? [[String: Any]],
                           let firstCandidate = candidates.first,
                           let content = firstCandidate["content"] as? [String: Any],
-                          let parts = content["parts"] as? [[String: Any]],
-                          let firstPart = parts.first,
-                          let text = firstPart["text"] as? String else {
+                          let parts = content["parts"] as? [[String: Any]] else {
+                        Self.lastNetworkError = "Response format not recognized"
+                        completion(.failure(GeminiAPIError.invalidResponseFormat))
+                        return
+                    }
+                    let text = parts.compactMap { $0["text"] as? String }.joined()
+                    guard !text.isEmpty else {
                         Self.lastNetworkError = "Response format not recognized"
                         completion(.failure(GeminiAPIError.invalidResponseFormat))
                         return
