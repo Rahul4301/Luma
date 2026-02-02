@@ -5,8 +5,6 @@
  * Intercepts link clicks to navigate in the same tab (unless Cmd/Ctrl+Click).
  */
 
-import { ipcRenderer } from 'electron';
-
 // Wait for DOM to be ready
 document.addEventListener('DOMContentLoaded', () => {
   // Handle all link clicks
