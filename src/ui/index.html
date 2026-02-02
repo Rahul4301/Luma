@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Luma</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Tab Strip -->
+  <div id="tab-strip">
+    <div id="tabs-container">
+      <button id="new-tab-btn" class="icon-btn" title="Add Tab">+</button>
+    </div>
+  </div>
+
+  <!-- Address Bar -->
+  <div id="address-bar">
+    <button id="back-btn" class="icon-btn nav-btn" title="Back">←</button>
+    <button id="forward-btn" class="icon-btn nav-btn" title="Forward">→</button>
+    <button id="reload-btn" class="icon-btn nav-btn" title="Reload">↻</button>
+    <input 
+      type="text" 
+      id="url-input" 
+      placeholder="Search or enter address"
+      spellcheck="false"
+      autocomplete="off"
+    />
+    <button id="ai-toggle-btn" class="icon-btn" title="AI Panel (Cmd+E)">✨</button>
+  </div>
+
+  <!-- Main Container -->
+  <div id="main-container">
+    <!-- Browser View -->
+    <div id="browser-view">
+      <div id="webviews-container"></div>
+    </div>
+
+    <!-- AI Command Surface (hidden by default) -->
+    <div id="ai-panel" class="hidden">
+      <div id="ai-header">
+        <div class="ai-title">
+          <div class="ai-title-text">✨ Assistant</div>
+          <div class="ai-subtitle">
+            <span class="status-icon online">●</span>
+            <span>Context-aware • Recent context</span>
+          </div>
+        </div>
+        <button id="ai-close-btn" class="icon-btn">×</button>
+      </div>
+
+      <div id="context-disclosure">
+        <details>
+          <summary>Context (always included)</summary>
+          <div id="context-preview" class="context-content"></div>
+        </details>
+      </div>
+
+      <div id="chat-history"></div>
+
+      <div id="ai-input-container">
+        <textarea 
+          id="ai-input" 
+          placeholder="Ask about this page, or request an action..."
+          rows="3"
+        ></textarea>
+        <button id="ai-send-btn" class="primary-btn">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button id="settings-close-btn" class="icon-btn">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-group">
+          <label for="gemini-key-input">Gemini API Key</label>
+          <input 
+            type="password" 
+            id="gemini-key-input" 
+            placeholder="Enter your Gemini API key"
+          />
+          <div class="button-group">
+            <button id="save-key-btn" class="primary-btn">Save Key</button>
+            <button id="delete-key-btn" class="secondary-btn">Delete Key</button>
+          </div>
+        </div>
+        
+        <div class="setting-group">
+          <label>Model Selection</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="model" value="gemini" checked>
+              <span>Gemini 2.5 Flash (default)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="model" value="ollama">
+              <span>Local Ollama</span>
+            </label>
+          </div>
+        </div>
+        
+        <div class="setting-group" id="ollama-settings" style="display: none;">
+          <label for="ollama-endpoint">Ollama Endpoint</label>
+          <input 
+            type="text" 
+            id="ollama-endpoint" 
+            placeholder="http://localhost:11434"
+            value="http://localhost:11434"
+          />
+          <label for="ollama-model">Model</label>
+          <select id="ollama-model">
+            <option value="mistral">Mistral</option>
+            <option value="llama2">Llama 2</option>
+            <option value="codellama">Code Llama</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

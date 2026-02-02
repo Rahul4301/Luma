@@ -1,17 +1,28 @@
 # macOS
 .DS_Store
 
-Agents.md
-SRS.md
-Security.md
-dev_checklist.md
-# Xcode
+# Documentation (keep in repo)
+# Agents.md
+# SRS.md
+# Security.md
+# dev_checklist.md
+
+# Xcode (legacy Swift build)
 DerivedData/
 *.xcuserstate
 xcuserdata/
 
-# Swift
+# Swift (legacy)
 .build/
+
+# Node.js / Electron
+node_modules/
+package-lock.json
+dist/
+*.log
+
+# TypeScript
+*.tsbuildinfo
 
 # Secrets
 .env
