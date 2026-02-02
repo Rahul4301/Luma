@@ -121,21 +121,26 @@ function sampleTopRowColor(dataUrl) {
 async function extractSurfaceColor(webview) {
   if (!webview || colorSampleInFlight.has(webview)) return;
 
-  const currentUrl = webview.getURL?.() || '';
-  if (isStartUrl(currentUrl)) {
-    clearSurfaceColors();
-    return;
-  }
-
-  colorSampleInFlight.add(webview);
   try {
-    const image = await webview.capturePage({ x: 0, y: 0, width: 120, height: 1 });
-    const dataUrl = image.toDataURL();
-    const color = await sampleTopRowColor(dataUrl);
-    applySurfaceColor(color);
+    const currentUrl = webview.getURL?.() || '';
+    if (isStartUrl(currentUrl)) {
+      clearSurfaceColors();
+      return;
+    }
+
+    colorSampleInFlight.add(webview);
+    try {
+      const image = await webview.capturePage({ x: 0, y: 0, width: 120, height: 1 });
+      const dataUrl = image.toDataURL();
+      const color = await sampleTopRowColor(dataUrl);
+      applySurfaceColor(color);
+    } catch (e) {
+      // Ignore capture errors
+    } finally {
+      colorSampleInFlight.delete(webview);
+    }
   } catch (e) {
-    // Ignore capture errors
-  } finally {
+    // Webview not ready yet, ignore
     colorSampleInFlight.delete(webview);
   }
 }
@@ -147,7 +152,7 @@ function focusStartPageInput(webview) {
       webview.executeJavaScript(`document.getElementById('q')?.focus();`);
     }
   } catch (e) {
-    // Ignore focus errors
+    // Webview not ready yet, ignore
   }
 }
 
