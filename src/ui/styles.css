@@ -45,7 +45,7 @@ webview {
 /* Tab Strip */
 #tab-strip {
   height: 38px;
-  background: var(--bg-secondary);
+  background: #1a1a1a; /* Dark grey, distinguishable from black */
   display: flex;
   align-items: center;
   padding: 0 8px 0 78px; /* Left padding to clear traffic lights */
@@ -236,7 +236,14 @@ webview {
 }
 
 #ai-toggle-btn {
-  font-size: 14px;
+  width: auto !important;
+  padding: 0 10px;
+  gap: 6px;
+  font-size: 13px;
+}
+
+#ai-toggle-btn svg {
+  flex-shrink: 0;
 }
 
 #ai-toggle-btn.active {

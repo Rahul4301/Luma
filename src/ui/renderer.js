@@ -43,19 +43,19 @@ function clearSurfaceColors() {
     el.classList.contains('tab') && el.classList.contains('active')
   );
   if (activeTabEl) {
-    activeTabEl.style.background = '';
+    activeTabEl.style.background = 'rgb(13, 13, 13)'; // Start page color
     activeTabEl.classList.remove('light-bg');
   }
 
   const addressBar = document.getElementById('address-bar');
   if (addressBar) {
-    addressBar.style.background = '';
+    addressBar.style.background = 'rgb(13, 13, 13)'; // Start page color
     addressBar.classList.remove('light-bg');
   }
 
   if (urlInput) {
-    urlInput.style.background = '';
-    urlInput.style.borderColor = '';
+    urlInput.style.background = 'rgb(13, 13, 13)'; // Start page color
+    urlInput.style.borderColor = 'rgb(13, 13, 13)';
   }
 }
 
