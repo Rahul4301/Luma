@@ -13,9 +13,40 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var currentURL: URL?
 
     /// Per-tab page theme: background color and whether it is dark (for contrasting text).
-    private var pageThemeByTab: [UUID: (color: NSColor, isDark: Bool)] = [:]
+    fileprivate var pageThemeByTab: [UUID: (color: NSColor, isDark: Bool)] = [:]
     /// Theme for the currently active tab; used by chrome (tabs, address bar) to match page.
     @Published var pageThemeForActiveTab: (color: Color, isDark: Bool)?
+
+    /// Back/forward state for the active tab (updated in didFinish and when navigating).
+    private var canGoBackByTab: [UUID: Bool] = [:]
+    private var canGoForwardByTab: [UUID: Bool] = [:]
+    @Published var canGoBackForActiveTab: Bool = false
+    @Published var canGoForwardForActiveTab: Bool = false
+
+    /// Single message handler for theme; added to each webview config so we know which tab sent the message via message.webView.
+    private lazy var themeMessageHandler: ThemeMessageHandler = {
+        let h = ThemeMessageHandler()
+        h.wrapper = self
+        return h
+    }()
+
+    /// Script runs at documentEnd so theme color is available as soon as the page renders (O(1) relative to load).
+    private static let themeScriptSource = """
+        (function(){
+            var el = document.body || document.documentElement;
+            if (!el) return;
+            var bg = window.getComputedStyle(el).backgroundColor;
+            if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') { el = document.documentElement; bg = el ? window.getComputedStyle(el).backgroundColor : null; }
+            if (!bg || bg === 'transparent') { window.webkit.messageHandlers.lumaPageTheme.postMessage(''); return; }
+            var m = bg.match(/rgb\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)/);
+            if (m) { window.webkit.messageHandlers.lumaPageTheme.postMessage(m[1]+','+m[2]+','+m[3]); return; }
+            var m2 = bg.match(/rgba\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/);
+            if (m2) { window.webkit.messageHandlers.lumaPageTheme.postMessage(m2[1]+','+m2[2]+','+m2[3]); return; }
+            if (bg.indexOf('#') === 0 && bg.length >= 7) { var r=parseInt(bg.slice(1,3),16),g=parseInt(bg.slice(3,5),16),b=parseInt(bg.slice(5,7),16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); return; }
+            if (bg.length === 4) { var r=parseInt(bg[1]+bg[1],16),g=parseInt(bg[2]+bg[2],16),b=parseInt(bg[3]+bg[3],16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); return; }
+            window.webkit.messageHandlers.lumaPageTheme.postMessage('');
+        })();
+        """
 
     /// User-Agent matching current Safari on macOS so Google Workspace / Gmail treat the app as a supported browser.
     private static let safariLikeUserAgent =
@@ -25,6 +56,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
         if let wv = webViews[tabId] { return wv }
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
+        config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
+        let themeScript = WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        config.userContentController.addUserScript(themeScript)
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.customUserAgent = WebViewWrapper.safariLikeUserAgent
         wv.navigationDelegate = self
@@ -32,10 +66,23 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
         return wv
     }
 
+    func tabId(for webView: WKWebView) -> UUID? {
+        webViews.first(where: { $0.value === webView })?.key
+    }
+
+    func canGoBack(in tabId: UUID) -> Bool {
+        webViews[tabId]?.canGoBack ?? false
+    }
+
+    func canGoForward(in tabId: UUID) -> Bool {
+        webViews[tabId]?.canGoForward ?? false
+    }
+
     func setActiveTab(_ tabId: UUID) {
         activeTab = tabId
         currentURL = webViews[tabId]?.url
         updatePageThemeForActiveTab()
+        updateBackForwardForActiveTab()
     }
 
     func load(url: URL, in tabId: UUID) {
@@ -48,11 +95,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     func goBack(in tabId: UUID) {
-        webViews[tabId]?.goBack()
+        guard let wv = webViews[tabId], wv.canGoBack else { return }
+        wv.goBack()
     }
 
     func goForward(in tabId: UUID) {
-        webViews[tabId]?.goForward()
+        guard let wv = webViews[tabId], wv.canGoForward else { return }
+        wv.goForward()
     }
 
     func reload(in tabId: UUID) {
@@ -136,12 +185,17 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     func removeWebView(for tabId: UUID) {
         webViews.removeValue(forKey: tabId)
         pageThemeByTab.removeValue(forKey: tabId)
+        canGoBackByTab.removeValue(forKey: tabId)
+        canGoForwardByTab.removeValue(forKey: tabId)
         if activeTab == tabId {
             activeTab = nil
             currentURL = nil
             pageThemeForActiveTab = nil
+            canGoBackForActiveTab = false
+            canGoForwardForActiveTab = false
         } else {
             updatePageThemeForActiveTab()
+            updateBackForwardForActiveTab()
         }
     }
 
@@ -154,29 +208,24 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
                 self?.currentURL = webView.url
             }
         }
-        // Sample page background for chrome color matching (DIA-style unified chrome).
+        // Update back/forward state so toolbar buttons enable/disable correctly.
+        canGoBackByTab[tabId] = webView.canGoBack
+        canGoForwardByTab[tabId] = webView.canGoForward
+        updateBackForwardForActiveTab()
+        // Fallback: sample theme again at load end (documentEnd script may have already run).
         let script = """
         (function(){
             var el = document.body || document.documentElement;
             if (!el) return null;
             var bg = window.getComputedStyle(el).backgroundColor;
-            if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') {
-                el = document.documentElement;
-                bg = el ? window.getComputedStyle(el).backgroundColor : null;
-            }
+            if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') { el = document.documentElement; bg = el ? window.getComputedStyle(el).backgroundColor : null; }
             if (!bg || bg === 'transparent') return null;
             var m = bg.match(/rgb\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)/);
             if (m) return m[1] + ',' + m[2] + ',' + m[3];
             var m2 = bg.match(/rgba\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/);
             if (m2) return m2[1] + ',' + m2[2] + ',' + m2[3];
-            if (bg.indexOf('#') === 0 && bg.length >= 7) {
-                var r = parseInt(bg.slice(1,3), 16), g = parseInt(bg.slice(3,5), 16), b = parseInt(bg.slice(5,7), 16);
-                return r + ',' + g + ',' + b;
-            }
-            if (bg.length === 4) {
-                var r = parseInt(bg[1]+bg[1], 16), g = parseInt(bg[2]+bg[2], 16), b = parseInt(bg[3]+bg[3], 16);
-                return r + ',' + g + ',' + b;
-            }
+            if (bg.indexOf('#') === 0 && bg.length >= 7) { var r=parseInt(bg.slice(1,3),16),g=parseInt(bg.slice(3,5),16),b=parseInt(bg.slice(5,7),16); return r+','+g+','+b; }
+            if (bg.length === 4) { var r=parseInt(bg[1]+bg[1],16),g=parseInt(bg[2]+bg[2],16),b=parseInt(bg[3]+bg[3],16); return r+','+g+','+b; }
             return null;
         })();
         """
@@ -194,7 +243,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
 
-    private func updatePageThemeForActiveTab() {
+    fileprivate func updatePageThemeForActiveTab() {
         guard let id = activeTab, let theme = pageThemeByTab[id] else {
             pageThemeForActiveTab = nil
             return
@@ -202,8 +251,18 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
         pageThemeForActiveTab = (Color(nsColor: theme.color), theme.isDark)
     }
 
+    private func updateBackForwardForActiveTab() {
+        guard let id = activeTab else {
+            canGoBackForActiveTab = false
+            canGoForwardForActiveTab = false
+            return
+        }
+        canGoBackForActiveTab = canGoBackByTab[id] ?? webViews[id]?.canGoBack ?? false
+        canGoForwardForActiveTab = canGoForwardByTab[id] ?? webViews[id]?.canGoForward ?? false
+    }
+
     /// Parse JS result (e.g. "255,255,255" or null) into NSColor and luminance-based isDark.
-    private static func parsePageTheme(_ result: Any?) -> (NSColor?, Bool) {
+    fileprivate static func parsePageTheme(_ result: Any?) -> (NSColor?, Bool) {
         guard let str = result as? String, !str.isEmpty else { return (nil, false) }
         let parts = str.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
         guard parts.count >= 3 else { return (nil, false) }
@@ -211,5 +270,25 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
         let ns = NSColor(red: CGFloat(r)/255, green: CGFloat(g)/255, blue: CGFloat(b)/255, alpha: 1)
         let luminance = (0.299 * CGFloat(r) + 0.587 * CGFloat(g) + 0.114 * CGFloat(b)) / 255
         return (ns, luminance < 0.5)
+    }
+}
+
+// MARK: - Theme message handler (receives theme from documentEnd script for instant chrome color)
+
+private final class ThemeMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var wrapper: WebViewWrapper?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let wrapper = wrapper else { return }
+        guard let wv = message.webView, let tabId = wrapper.tabId(for: wv) else { return }
+        let (color, isDark) = WebViewWrapper.parsePageTheme(message.body)
+        DispatchQueue.main.async {
+            if let color = color {
+                wrapper.pageThemeByTab[tabId] = (color, isDark)
+            } else {
+                wrapper.pageThemeByTab.removeValue(forKey: tabId)
+            }
+            wrapper.updatePageThemeForActiveTab()
+        }
     }
 }

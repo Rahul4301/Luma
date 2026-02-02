@@ -91,26 +91,28 @@ struct BrowserShellView: View {
                     // ─── Address bar row (hidden on start page; single centered bar is the search there) ───
                     if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil {
                         HStack(spacing: 6) {
-                            // Nav buttons
+                            // Nav buttons (greyed out when nothing to go back/forward to)
                             HStack(spacing: 2) {
                                 Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
                                     Image(systemName: "chevron.left")
                                         .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(chromeText)
+                                        .foregroundColor(web.canGoBackForActiveTab ? chromeText : chromeText.opacity(0.35))
                                         .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(chromeText.opacity(0.15)))
+                                        .background(RoundedRectangle(cornerRadius: 6).fill((web.canGoBackForActiveTab ? chromeText : chromeText.opacity(0.35)).opacity(0.15)))
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(!web.canGoBackForActiveTab)
                                 .accessibilityLabel("Back")
 
                                 Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
                                     Image(systemName: "chevron.right")
                                         .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(chromeText)
+                                        .foregroundColor(web.canGoForwardForActiveTab ? chromeText : chromeText.opacity(0.35))
                                         .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(chromeText.opacity(0.15)))
+                                        .background(RoundedRectangle(cornerRadius: 6).fill((web.canGoForwardForActiveTab ? chromeText : chromeText.opacity(0.35)).opacity(0.15)))
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(!web.canGoForwardForActiveTab)
                                 .accessibilityLabel("Forward")
 
                                 Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
@@ -192,7 +194,6 @@ struct BrowserShellView: View {
                         .frame(height: addressBarHeight)
                         .frame(maxWidth: .infinity)
                         .background(chromeColor)
-                        .animation(.easeInOut(duration: 0.2), value: chromeColor)
                     }
 
                     // ─── Web content or start page ───────────────────────────
@@ -224,7 +225,9 @@ struct BrowserShellView: View {
                             }
                         } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
                             // Special luma://history page
-                            HistoryPageView()
+                            HistoryPageView(onSelectURL: { url in
+                                navigateToURL(url)
+                            })
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             ZStack {
