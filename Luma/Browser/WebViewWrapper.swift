@@ -7,7 +7,8 @@ import AppKit
 
 /// Manages one WKWebView per tab. Safe configuration, no message handlers.
 /// Exposes page theme (background color) for chrome unification.
-final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
+/// Handles file downloads via WKDownloadDelegate; saves to ~/Downloads and notifies DownloadManager.
+final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate {
     private var webViews: [UUID: WKWebView] = [:]
     private(set) var activeTab: UUID?
     @Published var currentURL: URL?
@@ -22,6 +23,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     private var canGoForwardByTab: [UUID: Bool] = [:]
     @Published var canGoBackForActiveTab: Bool = false
     @Published var canGoForwardForActiveTab: Bool = false
+
+    /// Pending download destination info for WKDownloadDelegate (keyed by ObjectIdentifier of WKDownload).
+    private var downloadDestinationByID: [ObjectIdentifier: (fileURL: URL, requestURL: URL?, suggestedFilename: String)] = [:]
 
     /// Single message handler for theme; added to each webview config so we know which tab sent the message via message.webView.
     private lazy var themeMessageHandler: ThemeMessageHandler = {
@@ -201,6 +205,30 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
 
     // MARK: - WKNavigationDelegate
 
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download, preferences)
+        } else {
+            decisionHandler(.allow, preferences)
+        }
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.canShowMIMEType {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.download)
+        }
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let tabId = webViews.first(where: { $0.value === webView })?.key else { return }
         if tabId == activeTab {
@@ -270,6 +298,32 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
         let ns = NSColor(red: CGFloat(r)/255, green: CGFloat(g)/255, blue: CGFloat(b)/255, alpha: 1)
         let luminance = (0.299 * CGFloat(r) + 0.587 * CGFloat(g) + 0.114 * CGFloat(b)) / 255
         return (ns, luminance < 0.5)
+    }
+
+    // MARK: - WKDownloadDelegate (saves to ~/Downloads, notifies DownloadManager)
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        var dest = downloadsDir.appendingPathComponent(suggestedFilename)
+        let pathExt = dest.pathExtension
+        let base = dest.deletingPathExtension().lastPathComponent
+        var counter = 1
+        while FileManager.default.fileExists(atPath: dest.path) {
+            let name = pathExt.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(pathExt)"
+            dest = downloadsDir.appendingPathComponent(name)
+            counter += 1
+        }
+        let requestURL = response.url ?? download.originalRequest?.url
+        let id = ObjectIdentifier(download)
+        downloadDestinationByID[id] = (dest, requestURL, suggestedFilename)
+        completionHandler(dest)
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        let id = ObjectIdentifier(download)
+        guard let info = downloadDestinationByID.removeValue(forKey: id) else { return }
+        let requestURL = info.requestURL ?? info.fileURL
+        DownloadManager.shared.addDownload(url: requestURL, fileURL: info.fileURL, suggestedFilename: info.suggestedFilename)
     }
 }
 

@@ -47,10 +47,12 @@ final class HistoryManager: ObservableObject {
     
     // MARK: - Chat History Management
     
+    /// Records a chat session. sessionId = tabId so all chats in the same tab belong to one session until the tab is closed.
     func recordChatSession(tabId: UUID, messages: [ChatMessage], summary: String? = nil) {
         let event = HistoryEvent(
             timestamp: Date(),
             type: .chatConversation,
+            sessionId: tabId,
             chatMessages: messages,
             conversationSummary: summary
         )

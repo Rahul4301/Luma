@@ -37,12 +37,14 @@ struct CommandSurfaceView: View {
     @State private var isLoadingContext: Bool = false
     @State private var contextRefreshTimer: Timer? = nil
 
-    private let panelBg = Color.black
-    private let textPrimary = Color(white: 0.9)
-    private let textSecondary = Color(white: 0.6)
-    /// Xcode AI assistant-style glow: cyan when active, subtle when idle
-    private let glowColorActive = Color(red: 0.35, green: 0.75, blue: 1.0)
-    private let glowColorDim = Color(red: 0.3, green: 0.6, blue: 0.9).opacity(0.15)
+    /// Smooth, soft, calming: dark gray with slight warmth instead of pure black
+    private let panelBg = Color(red: 0.09, green: 0.09, blue: 0.11)
+    private let panelBgSecondary = Color(red: 0.07, green: 0.07, blue: 0.09)
+    private let textPrimary = Color(white: 0.92)
+    private let textSecondary = Color(white: 0.58)
+    /// Soft, muted accent: gentle blue-slate when active, very subtle when idle
+    private let glowColorActive = Color(red: 0.45, green: 0.58, blue: 0.72)
+    private let glowColorDim = Color(red: 0.4, green: 0.5, blue: 0.62).opacity(0.12)
 
     private var chatFontSize: CGFloat { CGFloat(aiPanelFontSizeRaw) }
 
@@ -77,9 +79,10 @@ struct CommandSurfaceView: View {
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
             .background(panelBg)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             // Collapsible "What will be sent" (context always included)
             DisclosureGroup(isExpanded: $whatWillBeSentExpanded) {
@@ -92,9 +95,9 @@ struct CommandSurfaceView: View {
                     .font(.caption)
                     .foregroundColor(textSecondary)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(panelBg)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(panelBgSecondary)
             .tint(textSecondary)
 
             // Chat history: plain free-form text (no bubbles)
@@ -105,8 +108,8 @@ struct CommandSurfaceView: View {
                             ChatBubble(message: msg, isUser: msg.role == .user, fontSize: chatFontSize)
                         }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: messages.count) { _, _ in
@@ -131,17 +134,16 @@ struct CommandSurfaceView: View {
                         isFocused: $isInputFocused,
                         onSubmit: sendCommand
                     )
-                    .padding(10)
+                    .padding(12)
                     .frame(maxHeight: 80)
-                    .background(Color(white: 0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .background(Color(white: 0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(isGlowActive ? glowColorActive : glowColorDim, lineWidth: isGlowActive ? 2 : 1)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(isGlowActive ? glowColorActive : glowColorDim, lineWidth: isGlowActive ? 1.5 : 1)
                     )
-                    .shadow(color: isGlowActive ? glowColorActive.opacity(0.6) : glowColorDim.opacity(0.3), radius: isGlowActive ? 12 : 4)
-                    .shadow(color: isGlowActive ? glowColorActive.opacity(0.3) : .clear, radius: isGlowActive ? 24 : 0)
-                    .animation(.easeInOut(duration: 0.12), value: isGlowActive)
+                    .shadow(color: isGlowActive ? glowColorActive.opacity(0.25) : glowColorDim.opacity(0.15), radius: isGlowActive ? 8 : 4)
+                    .animation(.easeInOut(duration: 0.2), value: isGlowActive)
 
                     Button(action: sendCommand) {
                         Image(systemName: "arrow.up.circle.fill")
@@ -181,10 +183,11 @@ struct CommandSurfaceView: View {
                     Spacer(minLength: 0)
                 }
             }
-            .padding(12)
-            .background(panelBg)
+            .padding(16)
+            .background(panelBgSecondary)
         }
         .background(panelBg)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onAppear {
             loadPageContext()
             startContextRefreshTimer()
@@ -223,18 +226,18 @@ struct CommandSurfaceView: View {
         let isUser: Bool
         let fontSize: CGFloat
 
-        private let userBubbleColor = Color(white: 0.28)
-        private let textColor = Color(white: 0.88)
+        private let userBubbleColor = Color(white: 0.22)
+        private let textColor = Color(white: 0.9)
 
         var body: some View {
             HStack(alignment: .top, spacing: 0) {
                 if isUser { Spacer(minLength: 32) }
                 if isUser {
                     messageTextView
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
                         .background(userBubbleColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 } else {
                     messageTextView

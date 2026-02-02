@@ -28,6 +28,7 @@ struct BrowserShellView: View {
     @FocusState private var addressBarFocused: Bool
     @State private var searchSuggestions: [String] = []
     @State private var suggestionDebounceTask: DispatchWorkItem?
+    @State private var showDownloadsHub: Bool = false
 
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
@@ -188,6 +189,17 @@ struct BrowserShellView: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Toggle AI panel")
+
+                            // Downloads hub (far right, aesthetic)
+                            Button(action: { showDownloadsHub = true }) {
+                                Image(systemName: "arrow.down.circle")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(chromeText.opacity(0.9))
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Downloads")
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -204,7 +216,7 @@ struct BrowserShellView: View {
                         if !tabHasURL {
                             StartPageView(
                                 addressBarText: $addressBarText,
-                                searchSuggestions: searchSuggestions,
+                                searchSuggestions: Array(searchSuggestions.prefix(5)),
                                 onSelectSuggestion: { suggestion in
                                     addressBarText = suggestion
                                     searchSuggestions = []
@@ -254,35 +266,19 @@ struct BrowserShellView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
                 .overlay(alignment: .topLeading) {
-                    // Search suggestions dropdown (only when address bar row is visible, not on start page)
+                    // Search suggestions dropdown: only when address bar visible, non-empty query, max 5, with hover
                     if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil,
-                       addressBarFocused, !searchSuggestions.isEmpty {
-                        VStack(spacing: 0) {
-                            ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
-                                Button(action: {
-                                    addressBarText = suggestion
-                                    searchSuggestions = []
-                                    navigateFromAddressBar()
-                                }) {
-                                    HStack {
-                                        Image(systemName: "magnifyingglass")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 20)
-                                        Text(suggestion)
-                                            .font(.system(size: 13))
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
+                       addressBarFocused,
+                       !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty,
+                       !searchSuggestions.isEmpty {
+                        AddressBarSuggestionsList(
+                            suggestions: Array(searchSuggestions.prefix(5)),
+                            onSelect: {
+                                addressBarText = $0
+                                searchSuggestions = []
+                                navigateFromAddressBar()
                             }
-                        }
+                        )
                         .background(Color(nsColor: .windowBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .shadow(color: .black.opacity(0.15), radius: 8)
@@ -307,10 +303,6 @@ struct BrowserShellView: View {
                                     set: { 
                                         tabChatHistory[currentId] = $0
                                         saveChatHistory()
-                                        // Record chat session in history
-                                        if $0.count > 0 {
-                                            recordChatSession(tabId: currentId, messages: $0)
-                                        }
                                     }
                                 ),
                                 webViewWrapper: web,
@@ -353,6 +345,9 @@ struct BrowserShellView: View {
             } else {
                 Text("No action to execute.")
             }
+        }
+        .sheet(isPresented: $showDownloadsHub) {
+            DownloadsHubView()
         }
         .onAppear {
             loadChatHistory()
@@ -478,7 +473,7 @@ struct BrowserShellView: View {
                     return nil
                 }
                 DispatchQueue.main.async {
-                    searchSuggestions = phrases.prefix(8).map { $0 }
+                    searchSuggestions = phrases.prefix(5).map { $0 }
                 }
             }.resume()
         }
@@ -661,22 +656,7 @@ struct BrowserShellView: View {
         pendingAction = nil
     }
     
-    // MARK: - Chat History Persistence
-    
-    private func recordChatSession(tabId: UUID, messages: [ChatMessage]) {
-        // Only record if there are messages and it's been a meaningful conversation
-        guard messages.count >= 2 else { return }
-        
-        // Get summaries for this tab if they exist
-        let summaries = HistoryManager.shared.getSummariesForTab(tabId: tabId)
-        let combinedSummary = summaries.map { $0.summary }.joined(separator: " ")
-        
-        HistoryManager.shared.recordChatSession(
-            tabId: tabId,
-            messages: messages,
-            summary: combinedSummary.isEmpty ? nil : combinedSummary
-        )
-    }
+    // MARK: - Chat History Persistence (in-app only; chat sessions are not recorded to History)
     
     private func saveChatHistory() {
         let encoder = JSONEncoder()
@@ -728,6 +708,11 @@ private struct StartPageView: View {
 
     private let textMuted = Color.white.opacity(0.5)
 
+    /// Show suggestions only when search bar has text (not empty).
+    private var showSuggestions: Bool {
+        searchFocused && !searchSuggestions.isEmpty && !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     var body: some View {
         ZStack {
             // Black glassmorphism: opaque see-through (DIA-style)
@@ -741,7 +726,7 @@ private struct StartPageView: View {
             }
             .ignoresSafeArea()
 
-            // Single centered search bar (serves as the address bar)
+            // Stationary centered search bar (fixed in center; suggestions below when non-empty)
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
@@ -770,33 +755,10 @@ private struct StartPageView: View {
                 )
                 .animation(.easeInOut(duration: 0.15), value: searchFocused)
 
-                // Suggestions below the bar when focused
-                if searchFocused, !searchSuggestions.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
-                            Button(action: { onSelectSuggestion(suggestion) }) {
-                                HStack {
-                                    Image(systemName: "magnifyingglass")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(textMuted)
-                                        .frame(width: 20)
-                                    Text(suggestion)
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .lineLimit(1)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: 560, alignment: .leading)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.black.opacity(0.5))
+                if showSuggestions {
+                    StartPageSuggestionsList(
+                        suggestions: searchSuggestions,
+                        onSelect: onSelectSuggestion
                     )
                     .padding(.top, 8)
                 }
@@ -804,6 +766,164 @@ private struct StartPageView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear { searchFocused = true }
+    }
+}
+
+private struct StartPageSuggestionsList: View {
+    let suggestions: [String]
+    let onSelect: (String) -> Void
+    @State private var hoveredIndex: Int? = nil
+    private let textMuted = Color.white.opacity(0.5)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(suggestions.enumerated()), id: \.element) { index, suggestion in
+                Button(action: { onSelect(suggestion) }) {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 11))
+                            .foregroundColor(textMuted)
+                            .frame(width: 20)
+                        Text(suggestion)
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: 560, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(hoveredIndex == index ? Color.white.opacity(0.12) : Color.clear)
+                    )
+                    .onHover { hovering in
+                        hoveredIndex = hovering ? index : nil
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.black.opacity(0.5))
+        )
+    }
+}
+
+// MARK: - Downloads hub (recent downloads; open / reveal in Finder)
+
+private struct DownloadsHubView: View {
+    @ObservedObject private var downloadManager = DownloadManager.shared
+    @Environment(\.dismiss) private var dismiss
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 18, weight: .medium))
+                Text("Downloads")
+                    .font(.system(size: 18, weight: .semibold))
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(Color(white: 0.12))
+
+            if downloadManager.recentDownloads.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.secondary)
+                    Text("No recent downloads")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(downloadManager.recentDownloads) { item in
+                        HStack(spacing: 12) {
+                            Image(systemName: "doc.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.suggestedFilename)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(Self.dateFormatter.string(from: item.date))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("Open") {
+                                downloadManager.open(item)
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Show in Finder") {
+                                downloadManager.revealInFinder(item)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+        .frame(minWidth: 420, minHeight: 320)
+        .background(Color(white: 0.11))
+    }
+}
+
+// MARK: - Address bar suggestions (hover indicator)
+
+private struct AddressBarSuggestionsList: View {
+    let suggestions: [String]
+    let onSelect: (String) -> Void
+    @State private var hoveredIndex: Int? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(suggestions.enumerated()), id: \.element) { index, suggestion in
+                Button(action: { onSelect(suggestion) }) {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                        Text(suggestion)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(hoveredIndex == index ? Color.primary.opacity(0.06) : Color.clear)
+                    )
+                    .onHover { hovering in
+                        hoveredIndex = hovering ? index : nil
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
 
@@ -1007,9 +1127,6 @@ private struct TabPill: View {
     private var title: String {
         url?.host ?? url?.absoluteString ?? "New Tab"
     }
-    private var leadingIcon: String {
-        url == nil ? "globe" : "doc.text"
-    }
     private var tabTextColor: Color {
         if isActive { return chromeTextIsLight ? .white : Color(white: 0.15) }
         return .white.opacity(0.7)
@@ -1019,10 +1136,17 @@ private struct TabPill: View {
         HStack(spacing: 0) {
             Button(action: onSelect) {
                 HStack(spacing: 6) {
-                    Image(systemName: leadingIcon)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(tabTextColor)
-                        .frame(width: 14, alignment: .center)
+                    Group {
+                        if let url = url {
+                            FaviconView(url: url)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: "globe")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(tabTextColor)
+                        }
+                    }
+                    .frame(width: 14, height: 14, alignment: .center)
                     Text(title)
                         .lineLimit(1)
                         .truncationMode(.tail)

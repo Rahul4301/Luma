@@ -74,7 +74,8 @@ struct HistoryEvent: Identifiable, Codable {
     let url: String?
     let pageTitle: String?
     
-    // For chat events
+    // For chat events: sessionId = tabId while tab was open; all chats in same tab share one session
+    let sessionId: UUID?
     let chatMessages: [ChatMessage]?
     let conversationSummary: String?
     
@@ -83,12 +84,13 @@ struct HistoryEvent: Identifiable, Codable {
         case chatConversation
     }
     
-    init(id: UUID = UUID(), timestamp: Date, type: EventType, url: String? = nil, pageTitle: String? = nil, chatMessages: [ChatMessage]? = nil, conversationSummary: String? = nil) {
+    init(id: UUID = UUID(), timestamp: Date, type: EventType, url: String? = nil, pageTitle: String? = nil, sessionId: UUID? = nil, chatMessages: [ChatMessage]? = nil, conversationSummary: String? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.type = type
         self.url = url
         self.pageTitle = pageTitle
+        self.sessionId = sessionId
         self.chatMessages = chatMessages
         self.conversationSummary = conversationSummary
     }

@@ -1,7 +1,7 @@
 // Luma MVP - History Page (luma://history)
 import SwiftUI
 
-/// Displays unified browsing and chat history in a compact timeline list.
+/// Displays browsing (URL) history only. Chat sessions are not shown.
 /// Accessible via luma://history special URL.
 struct HistoryPageView: View {
     @ObservedObject var historyManager = HistoryManager.shared
@@ -28,23 +28,21 @@ struct HistoryPageView: View {
         return f
     }()
 
+    /// URL history only (page visits), optionally filtered by search.
     private var filteredEvents: [HistoryEvent] {
-        if searchQuery.isEmpty {
-            return historyManager.getHistory(for: .allTime)
-        }
-        return historyManager.searchHistory(query: searchQuery)
+        let all = historyManager.getHistory(for: .allTime).filter { $0.type == .pageVisit }
+        if searchQuery.isEmpty { return all }
+        return historyManager.searchHistory(query: searchQuery).filter { $0.type == .pageVisit }
     }
 
     private var groupedByDate: [(date: Date, label: String, events: [HistoryEvent])] {
         let calendar = Calendar.current
         var grouped: [Date: [HistoryEvent]] = [:]
-
         for event in filteredEvents {
             let dateKey = calendar.startOfDay(for: event.timestamp)
             if grouped[dateKey] == nil { grouped[dateKey] = [] }
             grouped[dateKey]?.append(event)
         }
-
         return grouped.keys.sorted(by: >).compactMap { date in
             let events = (grouped[date] ?? []).sorted(by: { $0.timestamp > $1.timestamp })
             return (date: date, label: dateSectionLabel(date), events: events)
@@ -53,7 +51,6 @@ struct HistoryPageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Compact header
             HStack {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 22, weight: .medium))
@@ -61,7 +58,7 @@ struct HistoryPageView: View {
                 Text("History")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(textPrimary)
-                Text("\(filteredEvents.count) events")
+                Text("\(filteredEvents.count) sites")
                     .font(.system(size: 12))
                     .foregroundColor(textSecondary)
                 Spacer()
@@ -87,7 +84,6 @@ struct HistoryPageView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
             .background(bgColor)
-
             Divider().opacity(0.2)
 
             if filteredEvents.isEmpty {
@@ -98,14 +94,13 @@ struct HistoryPageView: View {
                         ForEach(Array(groupedByDate.enumerated()), id: \.offset) { _, group in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(group.label)
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.system(size: 18, weight: .semibold))
                                     .foregroundColor(textSecondary)
                                     .padding(.horizontal, 20)
-                                    .padding(.top, 16)
-                                    .padding(.bottom, 6)
-
+                                    .padding(.top, 20)
+                                    .padding(.bottom, 8)
                                 ForEach(group.events) { event in
-                                    historyRow(event)
+                                    urlHistoryRow(event)
                                 }
                             }
                         }
@@ -132,7 +127,7 @@ struct HistoryPageView: View {
             Image(systemName: "clock.badge.questionmark")
                 .font(.system(size: 40))
                 .foregroundColor(textSecondary.opacity(0.5))
-            Text("No history found")
+            Text("No browsing history")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(textSecondary)
         }
@@ -140,22 +135,34 @@ struct HistoryPageView: View {
     }
 
     @ViewBuilder
-    private func historyRow(_ event: HistoryEvent) -> some View {
+    private func urlHistoryRow(_ event: HistoryEvent) -> some View {
         let timeStr = Self.timeFormatter.string(from: event.timestamp)
-
-        if event.type == .pageVisit, let urlString = event.url, let url = URL(string: urlString) {
+        let urlString = event.url ?? ""
+        let title = event.pageTitle ?? ""
+        if let url = URL(string: urlString) {
             Button(action: { onSelectURL(url) }) {
                 HStack(alignment: .center, spacing: 12) {
                     Text(timeStr)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(textSecondary)
                         .frame(width: 52, alignment: .leading)
-                    Text(urlString)
-                        .font(.system(size: 13))
-                        .foregroundColor(textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    FaviconView(url: url)
+                        .frame(width: 20, height: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if !title.isEmpty {
+                            Text(title)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(textPrimary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        Text(urlString)
+                            .font(.system(size: 12))
+                            .foregroundColor(textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
@@ -163,26 +170,11 @@ struct HistoryPageView: View {
             }
             .buttonStyle(.plain)
             .background(Color.white.opacity(0.03))
-        } else {
-            HStack(alignment: .center, spacing: 12) {
-                Text(timeStr)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(textSecondary)
-                    .frame(width: 52, alignment: .leading)
-                Text("Chat conversation")
-                    .font(.system(size: 13))
-                    .foregroundColor(textSecondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
         }
     }
 
     private func dateSectionLabel(_ date: Date) -> String {
         let calendar = Calendar.current
-        let now = Date()
         let dayPart = Self.dayFormatter.string(from: date)
         if calendar.isDateInToday(date) {
             return "Today - \(dayPart)"
@@ -198,7 +190,7 @@ struct HistoryPageView: View {
         case .today: return "This will clear all history from today."
         case .thisWeek: return "This will clear all history from the past 7 days."
         case .last30Days: return "This will clear all history from the past 30 days."
-        case .allTime: return "This will permanently delete all browsing and chat history."
+        case .allTime: return "This will permanently delete all browsing history."
         }
     }
 }
