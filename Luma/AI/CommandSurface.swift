@@ -235,7 +235,7 @@ struct CommandSurfaceView: View {
                         .padding(.vertical, 10)
                         .background(userBubbleColor)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .frame(maxWidth: 320, alignment: .trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 } else {
                     messageTextView
                         .frame(maxWidth: .infinity, alignment: .leading)

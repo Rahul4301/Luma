@@ -18,6 +18,7 @@ struct BrowserShellView: View {
     @State private var tabChatHistory: [UUID: [ChatMessage]] = [:]
     @State private var aiPanelWidth: CGFloat = 380
     @State private var shouldResetPanelWidth: Bool = false
+    @State private var isDraggingDivider: Bool = false
     @State private var eventMonitor: Any?
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
@@ -49,6 +50,7 @@ struct BrowserShellView: View {
 
             GeometryReader { geometry in
                 HStack(spacing: 0) {
+                    // Left: main browser content
                     VStack(spacing: 0) {
 
                     // ─── Tab strip ───────────────────────────────────────────
@@ -207,7 +209,10 @@ struct BrowserShellView: View {
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
-                                handleURLDrop(providers: providers, action: { navigateToURL($0) })
+                                handleURLDrop(providers: providers) { url in
+                                    addressBarText = url.absoluteString
+                                    navigateToURL(url)
+                                }
                             }
                         } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
                             // Special luma://history page
@@ -278,7 +283,7 @@ struct BrowserShellView: View {
                     // ─── AI side panel ───────────────────────────────────────────
                     if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
                         HStack(spacing: 0) {
-                            PanelResizeHandle(panelWidth: $aiPanelWidth)
+                            PanelResizeHandle(panelWidth: $aiPanelWidth, windowWidth: geometry.size.width, isDragging: $isDraggingDivider)
 
                             CommandSurfaceView(
                                 isPresented: Binding(
@@ -305,17 +310,18 @@ struct BrowserShellView: View {
                                 pendingAction = response.action
                                 showActionConfirm = (response.action != nil)
                             }
-                            .frame(width: aiPanelWidth)
+                            .frame(width: aiPanelWidth - chromePadding)
                             .clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius))
                             .padding(.trailing, chromePadding)
                             .padding(.vertical, chromePadding)
+                            .animation(isDraggingDivider ? nil : .easeOut(duration: 0.15), value: aiPanelWidth)
                         }
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
-                        .animation(.easeInOut(duration: 0.1), value: tabsWithPanelOpen.contains(currentId))
+                        .animation(isDraggingDivider ? nil : .easeInOut(duration: 0.1), value: tabsWithPanelOpen.contains(currentId))
                         .onAppear {
                             if shouldResetPanelWidth {
-                                // Set to 1/4 of total width (3:1 ratio)
-                                aiPanelWidth = geometry.size.width / 4
+                                // Set to 1/3 of total width
+                                aiPanelWidth = geometry.size.width / 3
                                 shouldResetPanelWidth = false
                             }
                         }
@@ -883,31 +889,56 @@ private struct HistoryView: View {
 
 private struct PanelResizeHandle: View {
     @Binding var panelWidth: CGFloat
-    private let minWidth: CGFloat = 280
-    private let maxWidth: CGFloat = 700
-    @State private var dragStartWidth: CGFloat = 0
+    let windowWidth: CGFloat
+    @Binding var isDragging: Bool
+
+    @State private var dragStartWidth: CGFloat? = nil
+    @State private var isHovering: Bool = false
+
+    private var minWidth: CGFloat { windowWidth / 10 }
+    private var maxWidth: CGFloat { windowWidth / 2 }
 
     var body: some View {
         Rectangle()
-            .fill(Color.clear)
+            .fill(
+                (isHovering || isDragging)
+                    ? Color.white.opacity(0.3)
+                    : Color.white.opacity(0.1)
+            )
             .frame(width: 6)
             .contentShape(Rectangle())
             .onHover { hovering in
-                if hovering { NSCursor.resizeLeftRight.push() }
-                else { NSCursor.pop() }
+                isHovering = hovering
+                if !isDragging {
+                    if hovering { NSCursor.resizeLeftRight.push() }
+                    else { NSCursor.pop() }
+                }
             }
             .gesture(
-                DragGesture()
+                DragGesture(minimumDistance: 0) // local space is fine
                     .onChanged { value in
-                        if dragStartWidth == 0 { dragStartWidth = panelWidth }
-                        let newWidth = dragStartWidth - value.translation.width
-                        panelWidth = min(maxWidth, max(minWidth, newWidth))
+                        // Remember the width at drag start
+                        if dragStartWidth == nil {
+                            dragStartWidth = panelWidth
+                            isDragging = true
+                            NSCursor.resizeLeftRight.push()
+                        }
+
+                        // Panel on the RIGHT: drag right -> bigger, drag left -> smaller
+                        let base = dragStartWidth ?? panelWidth
+                        let proposed = base + value.translation.width
+                        let clamped = min(maxWidth, max(minWidth, proposed))
+
+                        panelWidth = clamped
                     }
-                    .onEnded { _ in dragStartWidth = 0 }
+                    .onEnded { _ in
+                        dragStartWidth = nil
+                        isDragging = false
+                        NSCursor.pop()
+                    }
             )
     }
 }
-
 // MARK: - Tab strip
 // No longer contains its own .padding(.leading, 72) — the parent applies
 // .padding(.leading, 78) to clear traffic lights.
@@ -1066,7 +1097,7 @@ struct WindowDragView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async {
-            view.window?.isMovableByWindowBackground = true
+            view.window?.isMovableByWindowBackground = false
         }
         return view
     }
@@ -1100,3 +1131,23 @@ struct TitlebarConfigurator: NSViewRepresentable {
 #Preview {
     BrowserShellView()
 }
+
+// MARK: - SplitBrowserShell integration
+
+// import AppKit
+
+// struct SplitBrowserShell: NSViewControllerRepresentable {
+//     let webView: WKWebView
+//     let aiPanel: AnyView
+
+//     func makeNSViewController(context: Context) -> SplitBrowserShellController {
+//         SplitBrowserShellController(webView: webView, aiPanel: aiPanel)
+//     }
+//     func updateNSViewController(_ nsViewController: SplitBrowserShellController, context: Context) {}
+// }
+
+// Usage:
+// Replace your HStack browser/AI panel region with:
+// SplitBrowserShell(webView: web.ensureWebView(for: currentId), aiPanel: AnyView(CommandSurfaceView(...)))
+// To toggle panel: call splitVC.toggleAIPanel(true/false)
+// You may need to refactor state management to coordinate panel open/close and width.
