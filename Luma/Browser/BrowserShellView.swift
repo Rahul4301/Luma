@@ -90,7 +90,9 @@ struct BrowserShellView: View {
                     .background(WindowDragView())
 
                     // ─── Address bar row (hidden on start page; single centered bar is the search there) ───
-                    if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil {
+                    if let cid = tabManager.currentTab,
+                       let u = tabManager.tabURL[cid] ?? nil,
+                       u.absoluteString != "about:blank" {
                         HStack(spacing: 6) {
                             // Nav buttons (greyed out when nothing to go back/forward to)
                             HStack(spacing: 2) {
@@ -210,10 +212,10 @@ struct BrowserShellView: View {
 
                     // ─── Web content or start page ───────────────────────────
                     if let currentId = tabManager.currentTab {
-                        let tabHasURL = (tabManager.tabURL[currentId] ?? nil) != nil
                         let currentURL = tabManager.tabURL[currentId] ?? nil
+                        let isStartPage = (currentURL == nil || currentURL?.absoluteString == "about:blank")
                         
-                        if !tabHasURL {
+                        if isStartPage {
                             StartPageView(
                                 addressBarText: $addressBarText,
                                 searchSuggestions: Array(searchSuggestions.prefix(5)),
@@ -236,6 +238,7 @@ struct BrowserShellView: View {
                                 }
                             }
                         } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
+                            // History page (always in its own tab)
                             // Special luma://history page
                             HistoryPageView(onSelectURL: { url in
                                 navigateToURL(url)
@@ -268,6 +271,7 @@ struct BrowserShellView: View {
                 .overlay(alignment: .topLeading) {
                     // Search suggestions dropdown: only when address bar visible, non-empty query, max 5, with hover
                     if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil,
+                       (tabManager.currentTab.flatMap { tabManager.tabURL[$0] ?? nil }?.absoluteString ?? "") != "about:blank",
                        addressBarFocused,
                        !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty,
                        !searchSuggestions.isEmpty {
@@ -429,10 +433,10 @@ struct BrowserShellView: View {
     private func syncAddressBarFromCurrentTab() {
         if let id = tabManager.currentTab {
             if let url = web.currentURL {
-                addressBarText = url.absoluteString
                 tabManager.navigate(tab: id, to: url)
+                addressBarText = (url.absoluteString == "about:blank") ? "" : url.absoluteString
             } else if let url = tabManager.tabURL[id] ?? nil {
-                addressBarText = url.absoluteString
+                addressBarText = (url.absoluteString == "about:blank") ? "" : url.absoluteString
             } else {
                 addressBarText = ""
             }
@@ -506,8 +510,13 @@ struct BrowserShellView: View {
     }
     
     private func navigateToHistory() {
+        // Always open History in a new tab
         if let url = URL(string: "luma://history") {
-            navigateToURL(url)
+            let id = tabManager.newTab(url: url)
+            web.setActiveTab(id)
+            addressBarText = url.absoluteString
+            isFirstLoad = false
+            return
         }
     }
 
@@ -515,12 +524,8 @@ struct BrowserShellView: View {
         // Handle luma:// scheme
         if url.scheme == "luma" {
             if url.host == "history" {
-                if tabManager.currentTab == nil {
-                    let id = tabManager.newTab(url: url)
-                    tabManager.navigate(tab: id, to: url)
-                } else if let id = tabManager.currentTab {
-                    tabManager.navigate(tab: id, to: url)
-                }
+                let id = tabManager.newTab(url: url)
+                web.setActiveTab(id)
                 addressBarText = url.absoluteString
                 isFirstLoad = false
                 return
@@ -537,8 +542,11 @@ struct BrowserShellView: View {
             tabManager.navigate(tab: id, to: url)
             web.load(url: url, in: id)
         }
-        tabManager.addNavigation(title: title, url: url)
-        HistoryManager.shared.recordPageVisit(url: url, title: title)
+        // Don't record start page (about:blank) in history
+        if url.absoluteString != "about:blank" {
+            tabManager.addNavigation(title: title, url: url)
+            HistoryManager.shared.recordPageVisit(url: url, title: title)
+        }
         addressBarText = url.absoluteString
     }
 
@@ -548,9 +556,11 @@ struct BrowserShellView: View {
         web.setActiveTab(id)
         web.load(url: url, in: id)
         tabManager.navigate(tab: id, to: url)
-        let title = url.host ?? url.absoluteString
-        tabManager.addNavigation(title: title, url: url)
-        HistoryManager.shared.recordPageVisit(url: url, title: title)
+        if url.absoluteString != "about:blank" {
+            let title = url.host ?? url.absoluteString
+            tabManager.addNavigation(title: title, url: url)
+            HistoryManager.shared.recordPageVisit(url: url, title: title)
+        }
         addressBarText = url.absoluteString
     }
 
@@ -594,6 +604,7 @@ struct BrowserShellView: View {
         let id = tabManager.newTab(url: nil)
         _ = web.ensureWebView(for: id)
         web.setActiveTab(id)
+        web.load(url: URL(string: "about:blank")!, in: id)
         addressBarText = ""
         addressBarFocused = true
     }
@@ -1132,9 +1143,14 @@ private struct TabPill: View {
     @State private var isHovered = false
 
     private var title: String {
-        url?.host ?? url?.absoluteString ?? "New Tab"
+        if url == nil || url?.absoluteString == "about:blank" { return "New Tab" }
+        if url?.scheme == "luma", url?.host == "history" { return "History" }
+        return url?.host ?? url?.absoluteString ?? "New Tab"
     }
     private var tabTextColor: Color {
+        if url?.scheme == "luma", url?.host == "history" {
+            return isActive ? .white : .white.opacity(0.7)
+        }
         if isActive { return chromeTextIsLight ? .white : Color(white: 0.15) }
         return .white.opacity(0.7)
     }

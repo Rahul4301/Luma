@@ -213,8 +213,31 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
     }
 
+    /// MIME types we display in the WebView; everything else (PDF, Word, ZIP, etc.) downloads.
+    private static let displayableMIMETypes: Set<String> = [
+        "text/html", "text/plain", "text/css", "text/javascript", "application/javascript",
+        "application/json", "application/xml", "image/svg+xml",
+        "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "image/x-icon"
+    ]
+
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-        if navigationResponse.canShowMIMEType {
+        // 1) Server says "save as file" → always download
+        if let http = navigationResponse.response as? HTTPURLResponse,
+           let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
+           disposition.lowercased().contains("attachment") {
+            decisionHandler(.download)
+            return
+        }
+        // 2) Display only web/document content; all other types (PDF, Word, etc.) download
+        let mime = (navigationResponse.response.mimeType ?? "").lowercased()
+        let isDisplayable: Bool = {
+            if mime.isEmpty { return true }
+            if Self.displayableMIMETypes.contains(mime) { return true }
+            if mime.hasPrefix("image/") { return true }
+            if mime.hasPrefix("text/") { return true }
+            return false
+        }()
+        if isDisplayable && navigationResponse.canShowMIMEType {
             decisionHandler(.allow)
         } else {
             decisionHandler(.download)
