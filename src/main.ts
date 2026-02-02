@@ -96,7 +96,9 @@ ipcMain.handle('tab:switch', async (_, tabId: string) => {
 });
 
 ipcMain.handle('tab:get-all', async () => {
-  return tabManager.getAllTabs();
+  const tabs = tabManager.getAllTabs();
+  console.log('tab:get-all called, returning:', tabs);
+  return tabs;
 });
 
 ipcMain.handle('tab:get-active', async () => {

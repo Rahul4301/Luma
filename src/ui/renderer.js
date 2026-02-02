@@ -159,6 +159,13 @@ const aiPanel = document.getElementById('ai-panel');
 const aiToggleBtn = document.getElementById('ai-toggle-btn');
 const aiCloseBtn = document.getElementById('ai-close-btn');
 const newTabBtn = document.getElementById('new-tab-btn');
+
+console.log('DOM elements:', {
+  tabsContainer: !!tabsContainer,
+  webviewsContainer: !!webviewsContainer,
+  urlInput: !!urlInput,
+  newTabBtn: !!newTabBtn
+});
 const backBtn = document.getElementById('back-btn');
 const forwardBtn = document.getElementById('forward-btn');
 const reloadBtn = document.getElementById('reload-btn');
@@ -175,16 +182,24 @@ const geminiKeyInput = document.getElementById('gemini-key-input');
 async function init() {
   try {
     console.log('Init start');
-    tabs = await lumaApi.tabGetAll();
-    console.log('Loaded tabs:', tabs);
+    console.log('lumaApi available:', !!lumaApi);
     
-    if (tabs.length === 0) {
-      const tab = await lumaApi.tabNew();
+    tabs = await lumaApi.tabGetAll();
+    console.log('Loaded tabs:', tabs, 'length:', tabs?.length);
+    
+    // Always ensure at least one tab exists
+    if (!tabs || tabs.length === 0) {
+      console.log('No tabs found, creating initial tab with luma://start');
+      const tab = await lumaApi.tabNew('luma://start');
+      console.log('Created tab:', tab);
       tabs = [tab];
     }
     
     activeTabId = tabs[0]?.id;
+    console.log('Setting active tab ID:', activeTabId);
+    console.log('About to render with tabs:', tabs);
     render();
+    console.log('Render complete');
     
     lumaApi.onToggleAIPanel(() => {
       toggleAIPanel();
@@ -196,6 +211,7 @@ async function init() {
     console.log('Init done');
   } catch (e) {
     console.error('Init error:', e);
+    console.error('Error stack:', e.stack);
   }
 }
 
@@ -627,7 +643,9 @@ document.addEventListener('keydown', (e) => {
 newTabBtn.addEventListener('click', newTab);
 aiToggleBtn.addEventListener('click', toggleAIPanel);
 aiCloseBtn.addEventListener('click', toggleAIPanel);
-aiSendBtn.addEventListener('click', sendAIMessage);
+if (aiSendBtn) {
+  aiSendBtn.addEventListener('click', sendAIMessage);
+}
 
 aiInput.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {

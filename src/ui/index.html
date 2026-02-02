@@ -44,17 +44,11 @@
     <!-- AI Command Surface (hidden by default) -->
     <div id="ai-panel" class="hidden">
       <div id="ai-header">
-        <div class="ai-title">
-          <div class="ai-title-text">✨ Assistant</div>
-          <div class="ai-subtitle">
-            <span class="status-icon online">●</span>
-            <span>Context-aware • Recent context</span>
-          </div>
-        </div>
+        <div class="ai-title">Assistant</div>
         <button id="ai-close-btn" class="icon-btn">×</button>
       </div>
 
-      <div id="context-disclosure">
+      <div id="context-disclosure" style="display: none;">
         <details>
           <summary>Context (always included)</summary>
           <div id="context-preview" class="context-content"></div>
@@ -64,12 +58,16 @@
       <div id="chat-history"></div>
 
       <div id="ai-input-container">
+        <div class="ai-action-buttons">
+          <button class="ai-action-btn">Explain</button>
+          <button class="ai-action-btn">Analyze</button>
+          <button class="ai-action-btn">Summarize</button>
+        </div>
         <textarea 
           id="ai-input" 
-          placeholder="Ask about this page, or request an action..."
-          rows="3"
+          placeholder="Ask a question about this page..."
+          rows="1"
         ></textarea>
-        <button id="ai-send-btn" class="primary-btn">Send</button>
       </div>
     </div>
   </div>
