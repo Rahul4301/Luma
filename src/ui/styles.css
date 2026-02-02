@@ -42,15 +42,16 @@ webview {
 }
 
 /* Tab Strip */
+/* Tab Strip */
 #tab-strip {
   height: 38px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   padding: 0 8px 0 78px; /* Left padding to clear traffic lights */
   gap: 8px;
   -webkit-app-region: drag; /* Allow window dragging */
+  transition: all 0.2s ease;
 }
 
 #tabs-container {
@@ -96,6 +97,21 @@ webview {
   -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 
+.tab.active.light-bg .tab-title {
+  color: #000000;
+}
+
+.tab.active.light-bg .tab-close {
+  color: #000000;
+}
+
+.tab-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
 .tab-title {
   flex: 1;
   font-size: 12px;
@@ -135,12 +151,12 @@ webview {
 #address-bar {
   height: 44px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   padding: 0 12px;
   gap: 8px;
   transition: all 0.2s ease;
+  -webkit-app-region: drag; /* Allow window dragging */
 }
 
 #address-bar.hidden {
@@ -166,6 +182,20 @@ webview {
 #url-input:focus {
   border-color: var(--accent);
   background: var(--bg-primary);
+}
+
+#address-bar.light-bg #url-input {
+  color: #000000;
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+#address-bar.light-bg #url-input::placeholder {
+  color: rgba(0, 0, 0, 0.4);
+}
+
+#address-bar.light-bg .icon-btn {
+  color: #000000;
 }
 
 /* Icon Buttons */
@@ -194,6 +224,7 @@ webview {
 .nav-btn {
   font-size: 18px;
   font-weight: 300;
+  -webkit-app-region: no-drag;
 }
 
 #new-tab-btn {

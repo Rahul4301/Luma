@@ -20,6 +20,137 @@ function isStartUrl(url) {
   return url === 'luma://start' || (url && url.startsWith('file:') && url.includes('start.html'));
 }
 
+function isColorLight(colorString) {
+  // Parse RGB color string
+  const match = colorString.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (!match) return false;
+  
+  const r = parseInt(match[1]);
+  const g = parseInt(match[2]);
+  const b = parseInt(match[3]);
+  
+  // Calculate luminance using standard formula
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  
+  // Consider colors with luminance > 0.5 as light
+  return luminance > 0.5;
+}
+
+const colorSampleInFlight = new WeakSet();
+
+function clearSurfaceColors() {
+  const activeTabEl = Array.from(tabsContainer.children).find(el =>
+    el.classList.contains('tab') && el.classList.contains('active')
+  );
+  if (activeTabEl) {
+    activeTabEl.style.background = '';
+    activeTabEl.classList.remove('light-bg');
+  }
+
+  const addressBar = document.getElementById('address-bar');
+  if (addressBar) {
+    addressBar.style.background = '';
+    addressBar.classList.remove('light-bg');
+  }
+
+  if (urlInput) {
+    urlInput.style.background = '';
+    urlInput.style.borderColor = '';
+  }
+}
+
+function applySurfaceColor(rgbColor) {
+  const activeTabEl = Array.from(tabsContainer.children).find(el =>
+    el.classList.contains('tab') && el.classList.contains('active')
+  );
+  if (activeTabEl) {
+    activeTabEl.style.background = rgbColor;
+  }
+
+  const addressBar = document.getElementById('address-bar');
+  if (addressBar && !addressBar.classList.contains('hidden')) {
+    addressBar.style.background = rgbColor;
+  }
+
+  if (urlInput && !document.getElementById('address-bar')?.classList.contains('hidden')) {
+    urlInput.style.background = rgbColor;
+    urlInput.style.borderColor = rgbColor;
+  }
+
+  const isLight = isColorLight(rgbColor);
+  if (activeTabEl) {
+    activeTabEl.classList.toggle('light-bg', isLight);
+  }
+  if (addressBar) {
+    addressBar.classList.toggle('light-bg', isLight);
+  }
+}
+
+function sampleTopRowColor(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve('rgb(26, 26, 26)');
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const width = img.width;
+      const data = ctx.getImageData(0, 0, width, 1).data;
+      let r = 0, g = 0, b = 0, count = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        r += data[i];
+        g += data[i + 1];
+        b += data[i + 2];
+        count++;
+      }
+      r = Math.round(r / count);
+      g = Math.round(g / count);
+      b = Math.round(b / count);
+      resolve(`rgb(${r}, ${g}, ${b})`);
+    };
+    img.onerror = () => resolve('rgb(26, 26, 26)');
+    img.src = dataUrl;
+  });
+}
+
+async function extractSurfaceColor(webview) {
+  if (!webview || colorSampleInFlight.has(webview)) return;
+
+  const currentUrl = webview.getURL?.() || '';
+  if (isStartUrl(currentUrl)) {
+    clearSurfaceColors();
+    return;
+  }
+
+  colorSampleInFlight.add(webview);
+  try {
+    const image = await webview.capturePage({ x: 0, y: 0, width: 120, height: 1 });
+    const dataUrl = image.toDataURL();
+    const color = await sampleTopRowColor(dataUrl);
+    applySurfaceColor(color);
+  } catch (e) {
+    // Ignore capture errors
+  } finally {
+    colorSampleInFlight.delete(webview);
+  }
+}
+
+function focusStartPageInput(webview) {
+  try {
+    const currentUrl = webview.getURL?.() || '';
+    if (isStartUrl(currentUrl)) {
+      webview.executeJavaScript(`document.getElementById('q')?.focus();`);
+    }
+  } catch (e) {
+    // Ignore focus errors
+  }
+}
+
 // DOM
 const tabsContainer = document.getElementById('tabs-container');
 const webviewsContainer = document.getElementById('webviews-container');
@@ -80,6 +211,15 @@ function render() {
     const tabEl = document.createElement('div');
     tabEl.className = 'tab' + (tab.id === activeTabId ? ' active' : '');
     
+    // Add favicon if available
+    if (tab.favicon) {
+      const faviconEl = document.createElement('img');
+      faviconEl.className = 'tab-favicon';
+      faviconEl.src = tab.favicon;
+      faviconEl.onerror = () => faviconEl.style.display = 'none';
+      tabEl.appendChild(faviconEl);
+    }
+    
     const titleEl = document.createElement('span');
     titleEl.className = 'tab-title';
     titleEl.textContent = tab.title || '';
@@ -129,10 +269,31 @@ function renderWebviews() {
       webview.src = resolveTabUrl(tab.url);
       webview.preload = 'file://' + window.location.pathname.replace('/ui/index.html', '/webview-preload.js');
       
-      webview.addEventListener('did-stop-loading', () => {
-        const title = webview.getTitle?.() || 'Page';
+      webview.addEventListener('did-stop-loading', async () => {
         const url = webview.getURL?.() || '';
-        updateTabInfo(tab.id, title, url);
+        let title = webview.getTitle?.() || 'Page';
+        
+        // Always use 'New Tab' for start pages
+        if (isStartUrl(url)) {
+          title = 'New Tab';
+        }
+        
+        // Get favicon
+        let favicon = null;
+        if (!isStartUrl(url)) {
+          try {
+            const favicons = await webview.executeJavaScript(`
+              Array.from(document.querySelectorAll('link[rel*="icon"]'))
+                .map(link => link.href)
+                .filter(href => href && href.startsWith('http'))[0] || null
+            `);
+            favicon = favicons;
+          } catch (e) {
+            // Ignore errors
+          }
+        }
+        
+        updateTabInfo(tab.id, title, url, favicon);
 
         if (tab.id === activeTabId) {
           urlInput.value = isStartUrl(url) ? '' : url;
@@ -145,6 +306,20 @@ function renderWebviews() {
       webview.addEventListener('did-start-loading', () => {
         if (tab.id === activeTabId) {
           // Could add loading indicator here
+        }
+      });
+
+      webview.addEventListener('did-commit-navigation', () => {
+        if (tab.id === activeTabId) {
+          extractSurfaceColor(webview);
+        }
+      });
+
+      // Extract background color early for instant visual feedback
+      webview.addEventListener('dom-ready', () => {
+        if (tab.id === activeTabId) {
+          extractSurfaceColor(webview);
+          focusStartPageInput(webview);
         }
       });
 
@@ -183,54 +358,29 @@ function updateWebviewVisibility() {
     const tabId = webview.id.replace('webview-', '');
     if (tabId === activeTabId) {
       webview.classList.add('active');
-      // Extract background color for active tab styling
-      extractWebviewBackground(webview, tabId);
+      // Extract top-row color for active tab styling
+      extractSurfaceColor(webview);
+      // Focus start page input if applicable
+      focusStartPageInput(webview);
     } else {
       webview.classList.remove('active');
     }
   });
 }
 
-function extractWebviewBackground(webview, tabId) {
-  try {
-    // Inject script to get background color
-    webview.executeJavaScript(`
-      (function() {
-        const bg = window.getComputedStyle(document.body).backgroundColor;
-        return bg || 'rgb(26, 26, 26)';
-      })()
-    `).then(bgColor => {
-      // Apply to active tab
-      const activeTabEl = Array.from(tabsContainer.children).find(el => 
-        el.classList.contains('tab') && el.classList.contains('active')
-      );
-      if (activeTabEl) {
-        activeTabEl.style.background = bgColor;
-      }
-    }).catch(() => {
-      // Fallback if script fails
-    });
-  } catch (e) {
-    // Silent fail for start page or errors
-  }
-}
-
-function updateTabInfo(tabId, title, url) {
+function updateTabInfo(tabId, title, url, favicon) {
   const tab = tabs.find(t => t.id === tabId);
   if (tab) {
     const wasStartPage = tab.url === 'luma://start';
     tab.title = title;
     tab.url = isStartUrl(url) ? 'luma://start' : url;
+    if (favicon) tab.favicon = favicon;
     const isStartPage = tab.url === 'luma://start';
     
-    // Re-render just the tab title without recreating webviews
-    const tabEl = Array.from(tabsContainer.children).find(
-      el => el.querySelector('.tab-title')?.textContent === tab.title || 
-            el.classList.contains('active')
-    );
-    if (tabEl && tab.id === activeTabId) {
-      const titleEl = tabEl.querySelector('.tab-title');
-      if (titleEl) titleEl.textContent = title;
+    // Re-render to update favicon and title
+    const tabIndex = tabs.findIndex(t => t.id === tabId);
+    if (tabIndex !== -1) {
+      render();
     }
     
     // Update address bar visibility if navigating away from or to start page
