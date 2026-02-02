@@ -3,12 +3,19 @@ import Foundation
 import WebKit
 import SwiftUI
 import Combine
+import AppKit
 
 /// Manages one WKWebView per tab. Safe configuration, no message handlers.
+/// Exposes page theme (background color) for chrome unification.
 final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     private var webViews: [UUID: WKWebView] = [:]
     private(set) var activeTab: UUID?
     @Published var currentURL: URL?
+
+    /// Per-tab page theme: background color and whether it is dark (for contrasting text).
+    private var pageThemeByTab: [UUID: (color: NSColor, isDark: Bool)] = [:]
+    /// Theme for the currently active tab; used by chrome (tabs, address bar) to match page.
+    @Published var pageThemeForActiveTab: (color: Color, isDark: Bool)?
 
     /// User-Agent matching current Safari on macOS so Google Workspace / Gmail treat the app as a supported browser.
     private static let safariLikeUserAgent =
@@ -28,6 +35,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     func setActiveTab(_ tabId: UUID) {
         activeTab = tabId
         currentURL = webViews[tabId]?.url
+        updatePageThemeForActiveTab()
     }
 
     func load(url: URL, in tabId: UUID) {
@@ -127,22 +135,81 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate {
     /// Removes a tab's WebView when the tab is closed.
     func removeWebView(for tabId: UUID) {
         webViews.removeValue(forKey: tabId)
+        pageThemeByTab.removeValue(forKey: tabId)
         if activeTab == tabId {
             activeTab = nil
             currentURL = nil
+            pageThemeForActiveTab = nil
+        } else {
+            updatePageThemeForActiveTab()
         }
     }
 
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            guard self.activeTab != nil else { return }
-            if let tabId = self.webViews.first(where: { $0.value === webView })?.key,
-               tabId == self.activeTab {
-                self.currentURL = webView.url
+        guard let tabId = webViews.first(where: { $0.value === webView })?.key else { return }
+        if tabId == activeTab {
+            DispatchQueue.main.async { [weak self] in
+                self?.currentURL = webView.url
             }
         }
+        // Sample page background for chrome color matching (DIA-style unified chrome).
+        let script = """
+        (function(){
+            var el = document.body || document.documentElement;
+            if (!el) return null;
+            var bg = window.getComputedStyle(el).backgroundColor;
+            if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') {
+                el = document.documentElement;
+                bg = el ? window.getComputedStyle(el).backgroundColor : null;
+            }
+            if (!bg || bg === 'transparent') return null;
+            var m = bg.match(/rgb\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)/);
+            if (m) return m[1] + ',' + m[2] + ',' + m[3];
+            var m2 = bg.match(/rgba\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/);
+            if (m2) return m2[1] + ',' + m2[2] + ',' + m2[3];
+            if (bg.indexOf('#') === 0 && bg.length >= 7) {
+                var r = parseInt(bg.slice(1,3), 16), g = parseInt(bg.slice(3,5), 16), b = parseInt(bg.slice(5,7), 16);
+                return r + ',' + g + ',' + b;
+            }
+            if (bg.length === 4) {
+                var r = parseInt(bg[1]+bg[1], 16), g = parseInt(bg[2]+bg[2], 16), b = parseInt(bg[3]+bg[3], 16);
+                return r + ',' + g + ',' + b;
+            }
+            return null;
+        })();
+        """
+        webView.evaluateJavaScript(script) { [weak self] result, _ in
+            guard let self = self else { return }
+            let (color, isDark) = Self.parsePageTheme(result)
+            DispatchQueue.main.async {
+                if let color = color {
+                    self.pageThemeByTab[tabId] = (color, isDark)
+                } else {
+                    self.pageThemeByTab.removeValue(forKey: tabId)
+                }
+                self.updatePageThemeForActiveTab()
+            }
+        }
+    }
+
+    private func updatePageThemeForActiveTab() {
+        guard let id = activeTab, let theme = pageThemeByTab[id] else {
+            pageThemeForActiveTab = nil
+            return
+        }
+        pageThemeForActiveTab = (Color(nsColor: theme.color), theme.isDark)
+    }
+
+    /// Parse JS result (e.g. "255,255,255" or null) into NSColor and luminance-based isDark.
+    private static func parsePageTheme(_ result: Any?) -> (NSColor?, Bool) {
+        guard let str = result as? String, !str.isEmpty else { return (nil, false) }
+        let parts = str.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count >= 3 else { return (nil, false) }
+        let r = min(255, max(0, parts[0])), g = min(255, max(0, parts[1])), b = min(255, max(0, parts[2]))
+        let ns = NSColor(red: CGFloat(r)/255, green: CGFloat(g)/255, blue: CGFloat(b)/255, alpha: 1)
+        let luminance = (0.299 * CGFloat(r) + 0.587 * CGFloat(g) + 0.114 * CGFloat(b)) / 255
+        return (ns, luminance < 0.5)
     }
 }

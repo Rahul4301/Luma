@@ -38,6 +38,24 @@ struct BrowserShellView: View {
     private let chromeCornerRadius: CGFloat = 14
     private let chromePadding: CGFloat = 4
 
+    /// DIA-style: unified chrome color (tabs + address bar + content). Start page = dark; web page = page theme or default.
+    private var chromeColor: Color {
+        let hasURL = tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil
+        if !hasURL { return Color(white: 0.13) }
+        if let theme = web.pageThemeForActiveTab { return theme.color }
+        return Color(nsColor: .windowBackgroundColor)
+    }
+
+    /// true = dark background → use light text; false = light background → use dark text.
+    private var chromeTextIsLight: Bool {
+        let hasURL = tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil
+        if !hasURL { return true }
+        return web.pageThemeForActiveTab?.isDark ?? false
+    }
+
+    private var chromeText: Color { chromeTextIsLight ? Color.white : Color(white: 0.15) }
+    private var chromeTextMuted: Color { chromeTextIsLight ? Color.white.opacity(0.7) : Color(white: 0.15).opacity(0.7) }
+
     var body: some View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
@@ -53,17 +71,11 @@ struct BrowserShellView: View {
                     // Left: main browser content
                     VStack(spacing: 0) {
 
-                    // ─── Tab strip ───────────────────────────────────────────
-                    // We draw it at the very top of our content area, then pull
-                    // it UP into the titlebar with a negative top padding equal
-                    // to the titlebar height.  Because titlebarAppearsTransparent
-                    // is set, our pixels paint right over the titlebar background.
-                    // .padding(.leading) clears the traffic-light buttons (≈78 pt).
+                    // ─── Tab strip (toolbar stays dark; active tab uses chromeColor) ───
                     TabStripView(
                         tabManager: tabManager,
-                        contentAreaColor: tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
-                            ? Color(white: 0.13)
-                            : Color(nsColor: .windowBackgroundColor),
+                        contentAreaColor: chromeColor,
+                        chromeTextIsLight: chromeTextIsLight,
                         onSwitch: { switchToTab($0) },
                         onClose: { closeTab($0) },
                         onNewTab: newTab,
@@ -72,119 +84,115 @@ struct BrowserShellView: View {
                     .frame(height: tabStripHeight)
                     .padding(.leading, 78)   // clear traffic lights
                     .padding(.trailing, 8)
-                    .padding(.top, -(tabStripHeight - 6)) // pull up into titlebar, leave 6pt breathing room
-                    .background(WindowDragView())   // keep window-drag working on empty titlebar area
+                    .padding(.top, -(tabStripHeight - 6)) // pull up into titlebar
+                    .background(Color(white: 0.12))   // toolbar: dark strip (traffic lights + inactive area)
+                    .background(WindowDragView())
 
-                    // ─── Divider between tab strip and address bar ───────────
-                    Divider()
-                        .opacity(0.2)
-
-                    // ─── Address bar row ─────────────────────────────────────
-                    HStack(spacing: 6) {
-                        // Nav buttons
-                        HStack(spacing: 2) {
-                            Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
-                                Image(systemName: "chevron.left")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Back")
-
-                            Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Forward")
-
-                            Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 28, height: 28)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Reload")
-                        }
-
-                        // Omnibox
-                        HStack(spacing: 8) {
-                            Image(systemName: "globe")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-
-                            TextField("Search or enter website name", text: $addressBarText)
-                                .textFieldStyle(.plain)
-                                .focused($addressBarFocused)
-                                .onSubmit {
-                                    searchSuggestions = []
-                                    navigateFromAddressBar()
-                                }
-                                .onChange(of: addressBarText) { _, newValue in
-                                    fetchSearchSuggestions(for: newValue)
-                                }
-                                .onChange(of: addressBarFocused) { _, focused in
-                                    if !focused { searchSuggestions = [] }
-                                }
-
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color(white: 0.18))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
-                        )
-                        .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
-                        .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
-                            handleURLDrop(providers: providers) { url in
-                                addressBarText = url.absoluteString
-                                navigateToURL(url)
-                            }
-                        }
-
-                        // Chat pill
-                        Button(action: toggleAIPanel) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "bubble.left.and.bubble.right")
-                                    .font(.system(size: 10, weight: .medium))
-                                Text("Chat")
-                                    .font(.system(size: 12, weight: .medium))
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(white: 0.22).opacity(0.8))
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Toggle AI panel")
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .frame(height: addressBarHeight)
-                    .frame(maxWidth: .infinity)
-                    .padding(chromePadding)
-                    .background(
-                        tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) == nil
-                            ? AnyView(Color(white: 0.13).clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius)))
-                            : AnyView(GlassBackground(material: .underWindowBackground, cornerRadius: chromeCornerRadius, padding: 0, shadowOpacity: 0.04))
-                    )
-
+                    // ─── Address bar row (hidden on start page; single centered bar is the search there) ───
                     if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil {
-                        HairlineDivider(opacity: 0.15)
+                        HStack(spacing: 6) {
+                            // Nav buttons
+                            HStack(spacing: 2) {
+                                Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
+                                    Image(systemName: "chevron.left")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(chromeText)
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(chromeText.opacity(0.15)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Back")
+
+                                Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(chromeText)
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(chromeText.opacity(0.15)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Forward")
+
+                                Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(chromeText)
+                                        .frame(width: 28, height: 28)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(chromeText.opacity(0.15)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Reload")
+                            }
+
+                            // Omnibox (unified look: subtle overlay on chrome)
+                            HStack(spacing: 8) {
+                                Image(systemName: "globe")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(chromeTextMuted)
+
+                                TextField("Search or enter website name", text: $addressBarText)
+                                    .textFieldStyle(.plain)
+                                    .foregroundColor(chromeText)
+                                    .focused($addressBarFocused)
+                                    .onSubmit {
+                                        searchSuggestions = []
+                                        navigateFromAddressBar()
+                                    }
+                                    .onChange(of: addressBarText) { _, newValue in
+                                        fetchSearchSuggestions(for: newValue)
+                                    }
+                                    .onChange(of: addressBarFocused) { _, focused in
+                                        if !focused { searchSuggestions = [] }
+                                    }
+
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(chromeTextMuted)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(chromeText.opacity(0.12))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
+                            )
+                            .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
+                            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                                handleURLDrop(providers: providers) { url in
+                                    addressBarText = url.absoluteString
+                                    navigateToURL(url)
+                                }
+                            }
+
+                            // Chat pill
+                            Button(action: toggleAIPanel) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "bubble.left.and.bubble.right")
+                                        .font(.system(size: 10, weight: .medium))
+                                    Text("Chat")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .foregroundColor(chromeText)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .fill(chromeText.opacity(0.15))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Toggle AI panel")
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .frame(height: addressBarHeight)
+                        .frame(maxWidth: .infinity)
+                        .background(chromeColor)
+                        .animation(.easeInOut(duration: 0.2), value: chromeColor)
                     }
 
                     // ─── Web content or start page ───────────────────────────
@@ -194,18 +202,18 @@ struct BrowserShellView: View {
                         
                         if !tabHasURL {
                             StartPageView(
-                                entries: tabManager.navigationHistory,
-                                onSelect: { url in
-                                    _ = web.ensureWebView(for: currentId)
-                                    web.setActiveTab(currentId)
-                                    web.load(url: url, in: currentId)
-                                    tabManager.navigate(tab: currentId, to: url)
-                                    tabManager.addNavigation(title: url.host ?? url.absoluteString, url: url)
-                                    HistoryManager.shared.recordPageVisit(url: url, title: url.host ?? url.absoluteString)
-                                    addressBarText = url.absoluteString
-                                    isFirstLoad = true
+                                addressBarText: $addressBarText,
+                                searchSuggestions: searchSuggestions,
+                                onSelectSuggestion: { suggestion in
+                                    addressBarText = suggestion
+                                    searchSuggestions = []
+                                    navigateFromAddressBar()
                                 },
-                                onOpenHistory: { navigateToHistory() }
+                                onSubmit: {
+                                    searchSuggestions = []
+                                    navigateFromAddressBar()
+                                },
+                                onChangeAddressBar: { fetchSearchSuggestions(for: $0) }
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
@@ -243,8 +251,9 @@ struct BrowserShellView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
                 .overlay(alignment: .topLeading) {
-                    // Search suggestions dropdown
-                    if addressBarFocused, !searchSuggestions.isEmpty {
+                    // Search suggestions dropdown (only when address bar row is visible, not on start page)
+                    if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil,
+                       addressBarFocused, !searchSuggestions.isEmpty {
                         VStack(spacing: 0) {
                             ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
                                 Button(action: {
@@ -703,135 +712,95 @@ struct BrowserShellView: View {
     }
 }
 
-// MARK: - Start page
+// MARK: - Start page (DIA-style: one tab, black glassmorphism, single centered search bar; no visible address bar)
 
 private struct StartPageView: View {
-    let entries: [HistoryEntry]
-    let onSelect: (URL) -> Void
-    let onOpenHistory: () -> Void
+    @Binding var addressBarText: String
+    let searchSuggestions: [String]
+    let onSelectSuggestion: (String) -> Void
+    let onSubmit: () -> Void
+    let onChangeAddressBar: (String) -> Void
 
-    private static let favorites: [(String, String, String)] = [
-        ("Google", "https://www.google.com", "magnifyingglass"),
-        ("Wikipedia", "https://www.wikipedia.org", "book.closed"),
-        ("GitHub", "https://github.com", "chevron.left.forwardslash.chevron.right"),
-        ("YouTube", "https://www.youtube.com", "play.rectangle"),
-    ]
+    @FocusState private var searchFocused: Bool
 
-    private let pageBg = Color(white: 0.11)
-    private let sectionTitle = Color.white.opacity(0.9)
-    private let muted = Color.white.opacity(0.5)
+    private let textMuted = Color.white.opacity(0.5)
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Favorites")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(sectionTitle)
-                    HStack(spacing: 16) {
-                        ForEach(Self.favorites, id: \.1) { title, urlString, iconName in
-                            if let url = URL(string: urlString) {
-                                FavoriteTile(title: title, iconName: iconName, action: { onSelect(url) })
+        ZStack {
+            // Black glassmorphism: opaque see-through (DIA-style)
+            ZStack {
+                Color.black.opacity(0.75)
+                VisualEffectView(
+                    material: .hudWindow,
+                    blendingMode: .behindWindow,
+                    state: .active
+                )
+            }
+            .ignoresSafeArea()
+
+            // Single centered search bar (serves as the address bar)
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(textMuted)
+                    TextField("Search the web...", text: $addressBarText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 16))
+                        .foregroundColor(.white.opacity(0.95))
+                        .focused($searchFocused)
+                        .onSubmit { onSubmit() }
+                        .onChange(of: addressBarText) { _, newValue in
+                            onChangeAddressBar(newValue)
+                        }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .frame(maxWidth: 560)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color.white.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(searchFocused ? Color.white.opacity(0.25) : Color.clear, lineWidth: 1.5)
+                )
+                .animation(.easeInOut(duration: 0.15), value: searchFocused)
+
+                // Suggestions below the bar when focused
+                if searchFocused, !searchSuggestions.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(Array(searchSuggestions.enumerated()), id: \.element) { _, suggestion in
+                            Button(action: { onSelectSuggestion(suggestion) }) {
+                                HStack {
+                                    Image(systemName: "magnifyingglass")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(textMuted)
+                                        .frame(width: 20)
+                                    Text(suggestion)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.white.opacity(0.9))
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: 560, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
                         }
                     }
-                }
-                if !entries.isEmpty {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Text("Recent")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(sectionTitle)
-                            Spacer()
-                            Button("All history", action: onOpenHistory)
-                                .font(.system(size: 12))
-                                .foregroundColor(muted)
-                                .buttonStyle(.plain)
-                        }
-                        LazyVGrid(columns: [
-                            GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12),
-                        ], spacing: 12) {
-                            ForEach(entries.prefix(12)) { entry in
-                                RecentCard(entry: entry) { onSelect(entry.url) }
-                            }
-                        }
-                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.black.opacity(0.5))
+                    )
+                    .padding(.top, 8)
                 }
             }
-            .padding(28)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(pageBg)
-    }
-}
-
-private struct FavoriteTile: View {
-    let title: String
-    let iconName: String
-    let action: () -> Void
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 10) {
-                Image(systemName: iconName)
-                    .font(.system(size: 24))
-                    .foregroundColor(.white.opacity(0.9))
-                    .frame(width: 56, height: 56)
-                    .background(Color.white.opacity(isHovered ? 0.18 : 0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.85))
-                    .lineLimit(1)
-            }
-            .frame(width: 88)
-            .padding(10)
-            .background(Color.white.opacity(isHovered ? 0.08 : 0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-    }
-}
-
-private struct RecentCard: View {
-    let entry: HistoryEntry
-    let action: () -> Void
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: "globe")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.5))
-                    .frame(width: 28, height: 28)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(entry.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
-                        .lineLimit(1)
-                    Text(entry.url.host ?? entry.url.absoluteString)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.45))
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.3))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Color.white.opacity(isHovered ? 0.12 : 0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        .onAppear { searchFocused = true }
     }
 }
 
@@ -946,6 +915,7 @@ private struct PanelResizeHandle: View {
 private struct TabStripView: View {
     @ObservedObject var tabManager: TabManager
     let contentAreaColor: Color
+    let chromeTextIsLight: Bool
     let onSwitch: (UUID) -> Void
     let onClose: (UUID) -> Void
     let onNewTab: () -> Void
@@ -965,6 +935,7 @@ private struct TabStripView: View {
                     url: tabManager.tabURL[tabId] ?? nil,
                     isActive: tabManager.currentTab == tabId,
                     contentAreaColor: contentAreaColor,
+                    chromeTextIsLight: chromeTextIsLight,
                     onSelect: { onSwitch(tabId) },
                     onClose: { onClose(tabId) }
                 )
@@ -975,7 +946,7 @@ private struct TabStripView: View {
             Button(action: onNewTab) {
                 Image(systemName: "plus")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.white.opacity(0.7))
                     .frame(width: 32, height: rowHeight - 4)
                     .contentShape(Rectangle())
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
@@ -1025,6 +996,7 @@ private struct TabPill: View {
     let url: URL?
     let isActive: Bool
     let contentAreaColor: Color
+    let chromeTextIsLight: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
     @State private var isHovered = false
@@ -1035,6 +1007,10 @@ private struct TabPill: View {
     private var leadingIcon: String {
         url == nil ? "globe" : "doc.text"
     }
+    private var tabTextColor: Color {
+        if isActive { return chromeTextIsLight ? .white : Color(white: 0.15) }
+        return .white.opacity(0.7)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1042,13 +1018,13 @@ private struct TabPill: View {
                 HStack(spacing: 6) {
                     Image(systemName: leadingIcon)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .foregroundColor(tabTextColor)
                         .frame(width: 14, alignment: .center)
                     Text(title)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .foregroundColor(tabTextColor)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.leading, 8)
@@ -1062,7 +1038,7 @@ private struct TabPill: View {
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(tabTextColor.opacity(0.8))
                     .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }
