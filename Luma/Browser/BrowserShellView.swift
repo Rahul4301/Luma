@@ -924,9 +924,9 @@ private struct PanelResizeHandle: View {
                             NSCursor.resizeLeftRight.push()
                         }
 
-                        // Panel on the RIGHT: drag right -> bigger, drag left -> smaller
+                        // Panel on the RIGHT: drag right -> smaller, drag left -> bigger (opposite of cursor direction)
                         let base = dragStartWidth ?? panelWidth
-                        let proposed = base + value.translation.width
+                        let proposed = base - value.translation.width
                         let clamped = min(maxWidth, max(minWidth, proposed))
 
                         panelWidth = clamped
