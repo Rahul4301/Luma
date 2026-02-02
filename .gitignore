@@ -13,6 +13,11 @@ xcuserdata/
 # Swift
 .build/
 
+# Node / JS build artifacts (do not commit)
+node_modules/
+dist/
+package-lock.json
+
 # Secrets
 .env
 
