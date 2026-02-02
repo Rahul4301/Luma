@@ -713,6 +713,36 @@ private struct StartPageView: View {
         searchFocused && !searchSuggestions.isEmpty && !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// Search bar only (stationary in center); suggestions shown in overlay below so bar never moves.
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(textMuted)
+            TextField("Search the web...", text: $addressBarText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 16))
+                .foregroundColor(.white.opacity(0.95))
+                .focused($searchFocused)
+                .onSubmit { onSubmit() }
+                .onChange(of: addressBarText) { _, newValue in
+                    onChangeAddressBar(newValue)
+                }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .frame(maxWidth: 560)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.white.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(searchFocused ? Color.white.opacity(0.25) : Color.clear, lineWidth: 1.5)
+        )
+        .animation(.easeInOut(duration: 0.15), value: searchFocused)
+    }
+
     var body: some View {
         ZStack {
             // Black glassmorphism: opaque see-through (DIA-style)
@@ -726,44 +756,21 @@ private struct StartPageView: View {
             }
             .ignoresSafeArea()
 
-            // Stationary centered search bar (fixed in center; suggestions below when non-empty)
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(textMuted)
-                    TextField("Search the web...", text: $addressBarText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 16))
-                        .foregroundColor(.white.opacity(0.95))
-                        .focused($searchFocused)
-                        .onSubmit { onSubmit() }
-                        .onChange(of: addressBarText) { _, newValue in
-                            onChangeAddressBar(newValue)
+            // Search bar fixed in center; suggestions in overlay directly below the bar
+            searchBar
+                .overlay(alignment: .top) {
+                    if showSuggestions {
+                        VStack(spacing: 0) {
+                            Spacer().frame(height: 48 + 8) // bar height + gap
+                            StartPageSuggestionsList(
+                                suggestions: searchSuggestions,
+                                onSelect: onSelectSuggestion
+                            )
                         }
+                        .frame(maxWidth: 560)
+                    }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
-                .frame(maxWidth: 560)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color.white.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(searchFocused ? Color.white.opacity(0.25) : Color.clear, lineWidth: 1.5)
-                )
-                .animation(.easeInOut(duration: 0.15), value: searchFocused)
-
-                if showSuggestions {
-                    StartPageSuggestionsList(
-                        suggestions: searchSuggestions,
-                        onSelect: onSelectSuggestion
-                    )
-                    .padding(.top, 8)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear { searchFocused = true }
     }
