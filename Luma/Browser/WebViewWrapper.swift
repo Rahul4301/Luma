@@ -8,7 +8,7 @@ import AppKit
 /// Manages one WKWebView per tab. Safe configuration, no message handlers.
 /// Exposes page theme (background color) for chrome unification.
 /// Handles file downloads via WKDownloadDelegate; saves to ~/Downloads and notifies DownloadManager.
-final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate {
+final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
     private var webViews: [UUID: WKWebView] = [:]
     private(set) var activeTab: UUID?
     @Published var currentURL: URL?
@@ -72,6 +72,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.customUserAgent = WebViewWrapper.safariLikeUserAgent
         wv.navigationDelegate = self
+        wv.uiDelegate = self
         webViews[tabId] = wv
         return wv
     }
@@ -407,6 +408,22 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         guard let info = downloadDestinationByID.removeValue(forKey: id) else { return }
         let requestURL = info.requestURL ?? info.fileURL
         DownloadManager.shared.addDownload(url: requestURL, fileURL: info.fileURL, suggestedFilename: info.suggestedFilename)
+    }
+
+    // MARK: - WKUIDelegate (native file picker for <input type="file">)
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canChooseFiles = true
+        panel.begin { response in
+            if response == .OK {
+                completionHandler(panel.urls)
+            } else {
+                completionHandler(nil)
+            }
+        }
     }
 }
 

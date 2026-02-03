@@ -90,7 +90,6 @@ struct BrowserShellView: View {
                     .padding(.trailing, 8)
                     .padding(.top, -(tabStripHeight - 6)) // pull up into titlebar
                     .background(Color(white: 0.12))   // toolbar: dark strip (traffic lights + inactive area)
-                    .background(WindowDragView())
 
                     // ─── Address bar row (hidden on start page; single centered bar is the search there) ───
                     if let cid = tabManager.currentTab,
@@ -408,6 +407,13 @@ struct BrowserShellView: View {
                     }
                     if key == "l" {
                         DispatchQueue.main.async { addressBarFocused = true }
+                        return nil
+                    }
+                    // Cmd+R: reload current tab
+                    if key == "r" {
+                        DispatchQueue.main.async {
+                            if let id = tabManager.currentTab { web.reload(in: id) }
+                        }
                         return nil
                     }
                     // Cmd+1...9: switch to tab by index
@@ -1150,6 +1156,7 @@ private struct TabStripView: View {
                     onSelect: { onSwitch(tabId) },
                     onClose: { onClose(tabId) }
                 )
+                .background(NonDraggableWindowView())
                 .frame(width: tabWidth, height: rowHeight)
                 .id(tabId)
                 .opacity(dropTargetIndex == index ? 0.7 : 1)
@@ -1180,13 +1187,17 @@ private struct TabStripView: View {
                     .contentShape(Rectangle())
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
             }
+            .background(NonDraggableWindowView())
             .buttonStyle(.plain)
             .accessibilityLabel("New tab")
             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
                 urlDropHandler(providers: providers)
             }
 
-            Spacer(minLength: 0)
+            // Only the empty toolbar space moves the window; tabs stay stationary for reordering
+            WindowDragRegionView()
+                .frame(maxWidth: .infinity)
+                .allowsHitTesting(true)
         }
         .frame(maxWidth: .infinity)
         .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
@@ -1308,14 +1319,26 @@ struct WebViewContainer: NSViewRepresentable {
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 }
 
-struct WindowDragView: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            view.window?.isMovableByWindowBackground = false
-        }
-        return view
-    }
+/// NSView that disallows window drag (returns false for mouseDownCanMoveWindow).
+/// Used behind tabs so dragging a tab doesn't move the window.
+private final class NonDraggableWindowNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+}
+
+struct NonDraggableWindowView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NonDraggableWindowNSView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// NSView that allows window drag only when hit (used for empty toolbar space).
+private final class WindowDragRegionNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+}
+
+/// Place this only in the empty toolbar space (e.g. after tabs and + button).
+/// Dragging from here moves the window; dragging from tabs reorders tabs.
+struct WindowDragRegionView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { WindowDragRegionNSView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
@@ -1336,6 +1359,7 @@ struct TitlebarConfigurator: NSViewRepresentable {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.styleMask.insert(.fullSizeContentView)
+            window.isMovableByWindowBackground = false
         }
         return view
     }
