@@ -36,6 +36,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// KVO observations for title changes per tab
     private var titleObservations: [UUID: NSKeyValueObservation] = [:]
     
+    /// KVO observations for URL changes per tab (for favicon updates)
+    private var urlObservations: [UUID: NSKeyValueObservation] = [:]
+    
+    /// Favicon URLs per tab (extracted from page <link rel="icon">)
+    @Published var faviconURLByTab: [UUID: URL?] = [:]
+    
     /// TabManager reference for updating titles
     weak var tabManager: TabManager?
 
@@ -82,13 +88,20 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webViews[tabId] = wv
         
         // Observe title changes for this tab
-        let observation = wv.observe(\.title, options: [.new]) { [weak self, tabId] webView, change in
+        let titleObservation = wv.observe(\.title, options: [.new]) { [weak self, tabId] webView, change in
             guard let self = self, let title = webView.title, !title.isEmpty else { return }
             DispatchQueue.main.async {
                 self.tabManager?.updateTitle(tab: tabId, title: title)
             }
         }
-        titleObservations[tabId] = observation
+        titleObservations[tabId] = titleObservation
+        
+        // Observe URL changes to fetch favicon
+        let urlObservation = wv.observe(\.url, options: [.new]) { [weak self, tabId] webView, change in
+            guard let self = self, webView.url != nil else { return }
+            self.fetchFavicon(for: tabId, webView: webView)
+        }
+        urlObservations[tabId] = urlObservation
         
         return wv
     }
@@ -201,6 +214,44 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         evaluateSelectedText(in: tabId, completion: completion)
     }
 
+    /// Fetches the favicon URL from the page's <link rel="icon"> tag
+    private func fetchFavicon(for tabId: UUID, webView: WKWebView) {
+        let script = """
+        (function() {
+            var links = document.querySelectorAll('link[rel*="icon"]');
+            for (var i = 0; i < links.length; i++) {
+                var href = links[i].getAttribute('href');
+                if (href) {
+                    // Make absolute URL if relative
+                    if (href.startsWith('//')) {
+                        return window.location.protocol + href;
+                    } else if (href.startsWith('/')) {
+                        return window.location.origin + href;
+                    } else if (!href.startsWith('http')) {
+                        return window.location.origin + '/' + href;
+                    }
+                    return href;
+                }
+            }
+            return '';
+        })();
+        """
+        
+        webView.evaluateJavaScript(script) { [weak self] result, error in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                if let urlString = result as? String, !urlString.isEmpty, let url = URL(string: urlString) {
+                    self.faviconURLByTab[tabId] = url
+                } else if let pageURL = webView.url, let host = pageURL.host {
+                    // Fallback to /favicon.ico
+                    self.faviconURLByTab[tabId] = URL(string: "https://\(host)/favicon.ico")
+                } else {
+                    self.faviconURLByTab[tabId] = nil
+                }
+            }
+        }
+    }
+    
     /// Extracts the page title from the active tab.
     func evaluatePageTitle(completion: @escaping (String?) -> Void) {
         guard let tabId = activeTab, let wv = webViews[tabId] else {
@@ -248,6 +299,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Removes a tab's WebView when the tab is closed.
     func removeWebView(for tabId: UUID) {
         titleObservations.removeValue(forKey: tabId)
+        urlObservations.removeValue(forKey: tabId)
+        faviconURLByTab.removeValue(forKey: tabId)
         webViews.removeValue(forKey: tabId)
         pageThemeByTab.removeValue(forKey: tabId)
         zoomByTab.removeValue(forKey: tabId)

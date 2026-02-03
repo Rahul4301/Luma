@@ -80,6 +80,7 @@ struct BrowserShellView: View {
                     // ─── Tab strip (toolbar stays dark; active tab uses chromeColor) ───
                     TabStripView(
                         tabManager: tabManager,
+                        faviconURLByTab: web.faviconURLByTab,
                         contentAreaColor: chromeColor,
                         chromeTextIsLight: chromeTextIsLight,
                         onSwitch: { switchToTab($0) },
@@ -1133,6 +1134,7 @@ private struct PanelResizeHandle: View {
 
 private struct TabStripView: View {
     @ObservedObject var tabManager: TabManager
+    let faviconURLByTab: [UUID: URL?]
     let contentAreaColor: Color
     let chromeTextIsLight: Bool
     let onSwitch: (UUID) -> Void
@@ -1155,6 +1157,7 @@ private struct TabStripView: View {
                     index: index + 1,
                     url: tabManager.tabURL[tabId] ?? nil,
                     title: tabManager.tabTitle[tabId],
+                    faviconURL: faviconURLByTab[tabId] ?? nil,
                     isActive: tabManager.currentTab == tabId,
                     contentAreaColor: contentAreaColor,
                     chromeTextIsLight: chromeTextIsLight,
@@ -1233,6 +1236,7 @@ private struct TabPill: View {
     let index: Int
     let url: URL?
     let title: String?
+    let faviconURL: URL?
     let isActive: Bool
     let contentAreaColor: Color
     let chromeTextIsLight: Bool
@@ -1264,7 +1268,7 @@ private struct TabPill: View {
                 HStack(spacing: 6) {
                     Group {
                         if let url = url {
-                            FaviconView(url: url)
+                            FaviconView(url: url, faviconURL: faviconURL)
                                 .frame(width: 14, height: 14)
                         } else {
                             Image(systemName: "globe")

@@ -2,16 +2,29 @@
 import SwiftUI
 
 /// Loads and displays a site favicon from URL (e.g. domain/favicon.ico).
+/// If a specific favicon URL is provided (from page <link rel="icon">), uses that instead.
 struct FaviconView: View {
     let url: URL
-    private var faviconURL: URL? {
+    let faviconURL: URL?
+    
+    init(url: URL, faviconURL: URL? = nil) {
+        self.url = url
+        self.faviconURL = faviconURL
+    }
+    
+    private var effectiveFaviconURL: URL? {
+        // Use provided favicon URL if available (e.g., from <link rel="icon">)
+        if let faviconURL = faviconURL {
+            return faviconURL
+        }
+        // Fallback to domain/favicon.ico
         guard let host = url.host, !host.isEmpty else { return nil }
         return URL(string: "https://\(host)/favicon.ico")
     }
 
     var body: some View {
         Group {
-            if let fav = faviconURL {
+            if let fav = effectiveFaviconURL {
                 AsyncImage(url: fav) { phase in
                     switch phase {
                     case .success(let image):
