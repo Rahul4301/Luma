@@ -56,4 +56,18 @@ final class DownloadManager: ObservableObject {
     func revealInFinder(_ item: DownloadItem) {
         NSWorkspace.shared.selectFile(item.fileURL.path, inFileViewerRootedAtPath: item.fileURL.deletingLastPathComponent().path)
     }
+
+    /// Remove an item from the recent downloads list (does not delete the file on disk).
+    func removeItem(_ item: DownloadItem) {
+        DispatchQueue.main.async { [weak self] in
+            self?.recentDownloads.removeAll { $0.id == item.id }
+        }
+    }
+
+    /// Remove an item by id.
+    func removeItem(id: UUID) {
+        DispatchQueue.main.async { [weak self] in
+            self?.recentDownloads.removeAll { $0.id == id }
+        }
+    }
 }

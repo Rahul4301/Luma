@@ -29,6 +29,8 @@ struct BrowserShellView: View {
     @State private var searchSuggestions: [String] = []
     @State private var suggestionDebounceTask: DispatchWorkItem?
     @State private var showDownloadsHub: Bool = false
+    @ObservedObject private var downloadManager = DownloadManager.shared
+    @State private var downloadIconScale: CGFloat = 1
 
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
@@ -192,16 +194,31 @@ struct BrowserShellView: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("Toggle AI panel")
 
-                            // Downloads hub (far right, aesthetic)
+                            // Downloads hub (heartbeat on new download + count badge)
                             Button(action: { showDownloadsHub = true }) {
-                                Image(systemName: "arrow.down.circle")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundColor(chromeText.opacity(0.9))
-                                    .frame(width: 28, height: 28)
-                                    .contentShape(Rectangle())
+                                ZStack(alignment: .topTrailing) {
+                                    Image(systemName: "arrow.down.circle")
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundColor(chromeText.opacity(0.9))
+                                        .frame(width: 28, height: 28)
+                                        .contentShape(Rectangle())
+                                        .scaleEffect(downloadIconScale)
+                                    if !downloadManager.recentDownloads.isEmpty {
+                                        Text(downloadManager.recentDownloads.count > 99 ? "99+" : "\(downloadManager.recentDownloads.count)")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(Capsule().fill(Color.accentColor))
+                                            .offset(x: 6, y: -6)
+                                    }
+                                }
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Downloads")
+                            .onChange(of: downloadManager.recentDownloads.count) { oldCount, newCount in
+                                if newCount > oldCount { runDownloadsHeartbeat() }
+                            }
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -614,6 +631,21 @@ struct BrowserShellView: View {
         closeTab(id)
     }
 
+    /// Heartbeat animation on downloads icon: pulse 25% bigger twice (1 → 1.25 → 1 → 1.25 → 1).
+    private func runDownloadsHeartbeat() {
+        let step: TimeInterval = 0.12
+        withAnimation(.easeInOut(duration: step)) { downloadIconScale = 1.25 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + step) {
+            withAnimation(.easeInOut(duration: step)) { downloadIconScale = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + step) {
+                withAnimation(.easeInOut(duration: step)) { downloadIconScale = 1.25 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + step) {
+                    withAnimation(.easeInOut(duration: step)) { downloadIconScale = 1 }
+                }
+            }
+        }
+    }
+
     private func closeTab(_ id: UUID) {
         web.removeWebView(for: id)
         tabsWithPanelOpen.remove(id)
@@ -893,6 +925,14 @@ private struct DownloadsHubView: View {
                                 downloadManager.revealInFinder(item)
                             }
                             .buttonStyle(.bordered)
+                            Button(role: .destructive) {
+                                downloadManager.removeItem(item)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove from list")
                         }
                         .padding(.vertical, 4)
                     }
