@@ -510,7 +510,10 @@ struct BrowserShellView: View {
         if trimmed.lowercased().hasPrefix("luma://") {
             return URL(string: trimmed)
         }
-        
+        // Handle file:// so we don't turn it into https://file:///...
+        if trimmed.lowercased().hasPrefix("file://") {
+            return URL(string: trimmed)
+        }
         if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
             return URL(string: trimmed)
         }
@@ -549,7 +552,7 @@ struct BrowserShellView: View {
             }
         }
         
-        let title = url.host ?? url.absoluteString
+        let title: String = (url.scheme == "file") ? url.lastPathComponent : (url.host ?? url.absoluteString)
         if tabManager.currentTab == nil {
             let id = tabManager.newTab(url: url)
             _ = web.ensureWebView(for: id)
