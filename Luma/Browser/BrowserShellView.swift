@@ -1161,7 +1161,7 @@ private struct TabStripView: View {
                     set: { if $0 { dropTargetIndex = index } else { dropTargetIndex = nil } }
                 )) { providers in
                     guard let provider = providers.first else { return false }
-                    provider.loadObject(ofClass: String.self) { obj, _ in
+                    _ = provider.loadObject(ofClass: String.self) { obj, _ in
                         guard let s = obj as? String, let from = Int(s) else { return }
                         DispatchQueue.main.async {
                             onReorder(from, index)

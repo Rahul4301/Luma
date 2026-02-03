@@ -31,7 +31,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private var zoomByTab: [UUID: CGFloat] = [:]
     private let zoomMin: CGFloat = 0.5
     private let zoomMax: CGFloat = 3.0
-    private let zoomStep: CGFloat = 0.25
+    private let zoomStep: CGFloat = 0.10
 
     /// Single message handler for theme; added to each webview config so we know which tab sent the message via message.webView.
     private lazy var themeMessageHandler: ThemeMessageHandler = {
