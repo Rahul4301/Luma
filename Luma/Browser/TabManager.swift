@@ -18,6 +18,7 @@ struct HistoryEntry: Identifiable {
 final class TabManager: ObservableObject {
     @Published var tabOrder: [UUID] = []
     @Published var tabURL: [UUID: URL?] = [:]
+    @Published var tabTitle: [UUID: String] = [:]
     @Published var currentTab: UUID? = nil
 
     /// Last N navigations (local only, non-persisted). Cmd+Y shows this list.
@@ -83,6 +84,10 @@ final class TabManager: ObservableObject {
     func navigate(tab id: UUID, to url: URL) {
         guard tabOrder.contains(id) else { return }
         tabURL[id] = url
+    }
+    
+    func updateTitle(tab id: UUID, title: String) {
+        tabTitle[id] = title
     }
 
     func navigateCurrentTab(to url: URL) {

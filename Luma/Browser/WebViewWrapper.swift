@@ -32,6 +32,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private let zoomMin: CGFloat = 0.5
     private let zoomMax: CGFloat = 3.0
     private let zoomStep: CGFloat = 0.10
+    
+    /// KVO observations for title changes per tab
+    private var titleObservations: [UUID: NSKeyValueObservation] = [:]
+    
+    /// TabManager reference for updating titles
+    weak var tabManager: TabManager?
 
     /// Single message handler for theme; added to each webview config so we know which tab sent the message via message.webView.
     private lazy var themeMessageHandler: ThemeMessageHandler = {
@@ -74,6 +80,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         wv.navigationDelegate = self
         wv.uiDelegate = self
         webViews[tabId] = wv
+        
+        // Observe title changes for this tab
+        let observation = wv.observe(\.title, options: [.new]) { [weak self, tabId] webView, change in
+            guard let self = self, let title = webView.title, !title.isEmpty else { return }
+            DispatchQueue.main.async {
+                self.tabManager?.updateTitle(tab: tabId, title: title)
+            }
+        }
+        titleObservations[tabId] = observation
+        
         return wv
     }
 
@@ -231,6 +247,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     /// Removes a tab's WebView when the tab is closed.
     func removeWebView(for tabId: UUID) {
+        titleObservations.removeValue(forKey: tabId)
         webViews.removeValue(forKey: tabId)
         pageThemeByTab.removeValue(forKey: tabId)
         zoomByTab.removeValue(forKey: tabId)

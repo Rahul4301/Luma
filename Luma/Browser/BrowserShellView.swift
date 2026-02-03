@@ -12,7 +12,10 @@ import UniformTypeIdentifiers
 /// Per SECURITY.md: No JS message handlers, no HTML scraping.
 struct BrowserShellView: View {
     @StateObject private var tabManager = TabManager()
-    @StateObject private var web = WebViewWrapper()
+    @StateObject private var web: WebViewWrapper = {
+        let wrapper = WebViewWrapper()
+        return wrapper
+    }()
     @State private var addressBarText: String = ""
     @State private var tabsWithPanelOpen: Set<UUID> = []
     @State private var tabChatHistory: [UUID: [ChatMessage]] = [:]
@@ -371,6 +374,7 @@ struct BrowserShellView: View {
             DownloadsHubView()
         }
         .onAppear {
+            web.tabManager = tabManager
             loadChatHistory()
             if tabManager.currentTab == nil {
                 _ = tabManager.newTab(url: nil)
@@ -1137,7 +1141,7 @@ private struct TabStripView: View {
     let onDropURLForNewTab: (URL) -> Void
     let onReorder: (Int, Int) -> Void
 
-    @State private var dropTargetIndex: Int? = nil
+    @State private var draggedTab: UUID? = nil
     private let rowHeight: CGFloat = 30
 
     var body: some View {
@@ -1150,6 +1154,7 @@ private struct TabStripView: View {
                     tabId: tabId,
                     index: index + 1,
                     url: tabManager.tabURL[tabId] ?? nil,
+                    title: tabManager.tabTitle[tabId],
                     isActive: tabManager.currentTab == tabId,
                     contentAreaColor: contentAreaColor,
                     chromeTextIsLight: chromeTextIsLight,
@@ -1159,24 +1164,17 @@ private struct TabStripView: View {
                 .background(NonDraggableWindowView())
                 .frame(width: tabWidth, height: rowHeight)
                 .id(tabId)
-                .opacity(dropTargetIndex == index ? 0.7 : 1)
+                .opacity(draggedTab == tabId ? 0.5 : 1.0)
                 .onDrag {
-                    NSItemProvider(object: "\(index)" as NSString)
+                    draggedTab = tabId
+                    return NSItemProvider(object: tabId.uuidString as NSString)
                 }
-                .onDrop(of: [.plainText], isTargeted: Binding(
-                    get: { dropTargetIndex == index },
-                    set: { if $0 { dropTargetIndex = index } else { dropTargetIndex = nil } }
-                )) { providers in
-                    guard let provider = providers.first else { return false }
-                    _ = provider.loadObject(ofClass: String.self) { obj, _ in
-                        guard let s = obj as? String, let from = Int(s) else { return }
-                        DispatchQueue.main.async {
-                            onReorder(from, index)
-                            dropTargetIndex = nil
-                        }
-                    }
-                    return true
-                }
+                .onDrop(of: [.plainText], delegate: TabDropDelegate(
+                    destinationTab: tabId,
+                    tabs: tabManager.tabOrder,
+                    draggedTab: $draggedTab,
+                    onReorder: onReorder
+                ))
             }
 
             Button(action: onNewTab) {
@@ -1234,6 +1232,7 @@ private struct TabPill: View {
     let tabId: UUID
     let index: Int
     let url: URL?
+    let title: String?
     let isActive: Bool
     let contentAreaColor: Color
     let chromeTextIsLight: Bool
@@ -1241,7 +1240,11 @@ private struct TabPill: View {
     let onClose: () -> Void
     @State private var isHovered = false
 
-    private var title: String {
+    private var displayTitle: String {
+        // Use provided title from page if available
+        if let title = title, !title.isEmpty { return title }
+        
+        // Fallback to URL-based titles
         if url == nil || url?.absoluteString == "about:blank" { return "New Tab" }
         if url?.scheme == "luma", url?.host == "history" { return "History" }
         if url?.scheme == "file" { return url?.lastPathComponent ?? "File" }
@@ -1270,7 +1273,7 @@ private struct TabPill: View {
                         }
                     }
                     .frame(width: 14, height: 14, alignment: .center)
-                    Text(title)
+                    Text(displayTitle)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .font(.system(size: 12, weight: .medium))
@@ -1306,7 +1309,7 @@ private struct TabPill: View {
         .animation(.easeInOut(duration: 0.15), value: isHovered)
         .animation(.easeInOut(duration: 0.15), value: isActive)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Tab \(index): \(title)")
+        .accessibilityLabel("Tab \(index): \(displayTitle)")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
     }
 }
@@ -1328,6 +1331,35 @@ private final class NonDraggableWindowNSView: NSView {
 struct NonDraggableWindowView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { NonDraggableWindowNSView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// MARK: - Tab Drop Delegate (smooth live reordering during drag)
+
+private struct TabDropDelegate: DropDelegate {
+    let destinationTab: UUID
+    let tabs: [UUID]
+    @Binding var draggedTab: UUID?
+    let onReorder: (Int, Int) -> Void
+    
+    func dropEntered(info: DropInfo) {
+        guard let draggedTab = draggedTab else { return }
+        guard let fromIndex = tabs.firstIndex(of: draggedTab),
+              let toIndex = tabs.firstIndex(of: destinationTab),
+              fromIndex != toIndex else { return }
+        
+        withAnimation(.easeInOut(duration: 0.25)) {
+            onReorder(fromIndex, toIndex)
+        }
+    }
+    
+    func performDrop(info: DropInfo) -> Bool {
+        draggedTab = nil
+        return true
+    }
+    
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
 }
 
 /// NSView that allows window drag only when hit (used for empty toolbar space).
