@@ -10,6 +10,7 @@ import AppKit
 /// Per SECURITY.md: Keys handled via KeychainManager only; UI never stores tokens directly.
 struct SettingsView: View {
     @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSizeRaw: Int = 13
+    @AppStorage("luma_appearance") private var appearance: String = "system"
     @State private var keyInput: String = ""
     @State private var statusText: String = ""
     @State private var hasKey: Bool = false
@@ -35,6 +36,21 @@ struct SettingsView: View {
                     get: { Double(aiPanelFontSizeRaw) },
                     set: { aiPanelFontSizeRaw = Int($0.rounded()) }
                 ), in: 6...32, step: 1)
+            }
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(8)
+            
+            // Appearance (Light / Dark / System)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Appearance")
+                    .font(.headline)
+                Picker("", selection: $appearance) {
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                    Text("System").tag("system")
+                }
+                .pickerStyle(.segmented)
             }
             .padding()
             .background(Color.gray.opacity(0.1))

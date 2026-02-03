@@ -27,6 +27,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Pending download destination info for WKDownloadDelegate (keyed by ObjectIdentifier of WKDownload).
     private var downloadDestinationByID: [ObjectIdentifier: (fileURL: URL, requestURL: URL?, suggestedFilename: String)] = [:]
 
+    /// Per-tab zoom (1.0 = 100%). Applied via document.body.style.zoom after load.
+    private var zoomByTab: [UUID: CGFloat] = [:]
+    private let zoomMin: CGFloat = 0.5
+    private let zoomMax: CGFloat = 3.0
+    private let zoomStep: CGFloat = 0.25
+
     /// Single message handler for theme; added to each webview config so we know which tab sent the message via message.webView.
     private lazy var themeMessageHandler: ThemeMessageHandler = {
         let h = ThemeMessageHandler()
@@ -91,8 +97,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func load(url: URL, in tabId: UUID) {
         let wv = ensureWebView(for: tabId)
-        let request = URLRequest(url: url)
-        wv.load(request)
+        if url.isFileURL {
+            // Use loadFileURL so PDF/Word/etc. display in-browser like Chrome (sandbox-safe)
+            let readAccessTo = url.deletingLastPathComponent()
+            wv.loadFileURL(url, allowingReadAccessTo: readAccessTo)
+        } else {
+            let request = URLRequest(url: url)
+            wv.load(request)
+        }
         if activeTab == tabId {
             currentURL = url
         }
@@ -110,6 +122,37 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func reload(in tabId: UUID) {
         webViews[tabId]?.reload()
+    }
+
+    // MARK: - Zoom (Cmd+ / Cmd- / Cmd0)
+
+    func zoomIn(_ tabId: UUID?) {
+        guard let id = tabId ?? activeTab else { return }
+        let current = zoomByTab[id] ?? 1.0
+        setZoom(min(current + zoomStep, zoomMax), for: id)
+    }
+
+    func zoomOut(_ tabId: UUID?) {
+        guard let id = tabId ?? activeTab else { return }
+        let current = zoomByTab[id] ?? 1.0
+        setZoom(max(current - zoomStep, zoomMin), for: id)
+    }
+
+    func zoomReset(_ tabId: UUID?) {
+        guard let id = tabId ?? activeTab else { return }
+        setZoom(1.0, for: id)
+    }
+
+    private func setZoom(_ zoom: CGFloat, for tabId: UUID) {
+        zoomByTab[tabId] = zoom
+        applyZoom(to: tabId)
+    }
+
+    private func applyZoom(to tabId: UUID) {
+        guard let wv = webViews[tabId] else { return }
+        let zoom = zoomByTab[tabId] ?? 1.0
+        let js = "document.body.style.zoom = \(zoom); document.documentElement.style.zoom = \(zoom);"
+        wv.evaluateJavaScript(js, completionHandler: nil)
     }
 
     func evaluateSelectedText(in tabId: UUID, completion: @escaping (String?) -> Void) {
@@ -189,6 +232,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func removeWebView(for tabId: UUID) {
         webViews.removeValue(forKey: tabId)
         pageThemeByTab.removeValue(forKey: tabId)
+        zoomByTab.removeValue(forKey: tabId)
         canGoBackByTab.removeValue(forKey: tabId)
         canGoForwardByTab.removeValue(forKey: tabId)
         if activeTab == tabId {
@@ -221,6 +265,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     ]
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        // 0) Local file:// URLs: always display in browser (don't treat as download)
+        if navigationResponse.response.url?.scheme?.lowercased() == "file" {
+            decisionHandler(.allow)
+            return
+        }
         // 1) Server says "save as file" → always download
         if let http = navigationResponse.response as? HTTPURLResponse,
            let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
@@ -228,8 +277,17 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             decisionHandler(.download)
             return
         }
-        // 2) Display only web/document content; all other types (PDF, Word, etc.) download
+        // 2) Main-frame navigation to remote image/* (HEIC, PNG, JPEG, etc.): download to Downloads
+        //    (subresources like <img> on a page stay allowed so images display)
+        let scheme = navigationResponse.response.url?.scheme?.lowercased()
         let mime = (navigationResponse.response.mimeType ?? "").lowercased()
+        if navigationResponse.isForMainFrame,
+           (scheme == "http" || scheme == "https"),
+           mime.hasPrefix("image/") {
+            decisionHandler(.download)
+            return
+        }
+        // 3) Display only web/document content; all other types (PDF, Word, etc.) download
         let isDisplayable: Bool = {
             if mime.isEmpty { return true }
             if Self.displayableMIMETypes.contains(mime) { return true }
@@ -263,6 +321,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         canGoBackByTab[tabId] = webView.canGoBack
         canGoForwardByTab[tabId] = webView.canGoForward
         updateBackForwardForActiveTab()
+        // Re-apply per-tab zoom after load
+        applyZoom(to: tabId)
         // Fallback: sample theme again at load end (documentEnd script may have already run).
         let script = """
         (function(){

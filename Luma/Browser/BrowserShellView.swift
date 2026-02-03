@@ -82,7 +82,8 @@ struct BrowserShellView: View {
                         onSwitch: { switchToTab($0) },
                         onClose: { closeTab($0) },
                         onNewTab: newTab,
-                        onDropURLForNewTab: { newTabWithURL($0) }
+                        onDropURLForNewTab: { newTabWithURL($0) },
+                        onReorder: { tabManager.moveTab(from: $0, to: $1) }
                     )
                     .frame(height: tabStripHeight)
                     .padding(.leading, 78)   // clear traffic lights
@@ -407,6 +408,30 @@ struct BrowserShellView: View {
                     }
                     if key == "l" {
                         DispatchQueue.main.async { addressBarFocused = true }
+                        return nil
+                    }
+                    // Cmd+1...9: switch to tab by index
+                    if key >= "1", key <= "9", let idx = Int(key), idx >= 1, idx <= 9 {
+                        DispatchQueue.main.async {
+                            if idx <= tabManager.tabCount() {
+                                tabManager.switchToTab(index: idx - 1)
+                            }
+                        }
+                        return nil
+                    }
+                    // Cmd+= / Cmd+Plus: zoom in
+                    if key == "=" || key == "+" {
+                        DispatchQueue.main.async { web.zoomIn(tabManager.currentTab) }
+                        return nil
+                    }
+                    // Cmd+-: zoom out
+                    if key == "-" {
+                        DispatchQueue.main.async { web.zoomOut(tabManager.currentTab) }
+                        return nil
+                    }
+                    // Cmd+0: zoom reset to 100%
+                    if key == "0" {
+                        DispatchQueue.main.async { web.zoomReset(tabManager.currentTab) }
                         return nil
                     }
                 }
@@ -1104,7 +1129,9 @@ private struct TabStripView: View {
     let onClose: (UUID) -> Void
     let onNewTab: () -> Void
     let onDropURLForNewTab: (URL) -> Void
+    let onReorder: (Int, Int) -> Void
 
+    @State private var dropTargetIndex: Int? = nil
     private let rowHeight: CGFloat = 30
 
     var body: some View {
@@ -1125,6 +1152,24 @@ private struct TabStripView: View {
                 )
                 .frame(width: tabWidth, height: rowHeight)
                 .id(tabId)
+                .opacity(dropTargetIndex == index ? 0.7 : 1)
+                .onDrag {
+                    NSItemProvider(object: "\(index)" as NSString)
+                }
+                .onDrop(of: [.plainText], isTargeted: Binding(
+                    get: { dropTargetIndex == index },
+                    set: { if $0 { dropTargetIndex = index } else { dropTargetIndex = nil } }
+                )) { providers in
+                    guard let provider = providers.first else { return false }
+                    provider.loadObject(ofClass: String.self) { obj, _ in
+                        guard let s = obj as? String, let from = Int(s) else { return }
+                        DispatchQueue.main.async {
+                            onReorder(from, index)
+                            dropTargetIndex = nil
+                        }
+                    }
+                    return true
+                }
             }
 
             Button(action: onNewTab) {
@@ -1188,6 +1233,7 @@ private struct TabPill: View {
     private var title: String {
         if url == nil || url?.absoluteString == "about:blank" { return "New Tab" }
         if url?.scheme == "luma", url?.host == "history" { return "History" }
+        if url?.scheme == "file" { return url?.lastPathComponent ?? "File" }
         return url?.host ?? url?.absoluteString ?? "New Tab"
     }
     private var tabTextColor: Color {

@@ -65,6 +65,21 @@ final class TabManager: ObservableObject {
         currentTab = id
     }
 
+    /// Switch to tab by index (0-based). Used for Cmd+1...9.
+    func switchToTab(index: Int) {
+        guard index >= 0, index < tabOrder.count else { return }
+        currentTab = tabOrder[index]
+    }
+
+    /// Reorder tabs (drag and drop). Moves tab at sourceIndex to destinationIndex.
+    func moveTab(from sourceIndex: Int, to destinationIndex: Int) {
+        guard sourceIndex >= 0, sourceIndex < tabOrder.count,
+              destinationIndex >= 0, destinationIndex <= tabOrder.count else { return }
+        let id = tabOrder.remove(at: sourceIndex)
+        let toOffset = destinationIndex > sourceIndex ? destinationIndex - 1 : destinationIndex
+        tabOrder.insert(id, at: toOffset)
+    }
+
     func navigate(tab id: UUID, to url: URL) {
         guard tabOrder.contains(id) else { return }
         tabURL[id] = url
