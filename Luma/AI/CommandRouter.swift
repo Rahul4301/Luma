@@ -1,6 +1,4 @@
-
 import Foundation
-
 /// Routes parsed LLM responses to deterministic browser actions.
 /// 
 /// Per AGENTS.md: Model output is a proposal. The app decides what can happen.
