@@ -578,8 +578,22 @@ private final class EnterSubmittingTextView: NSScrollView {
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
+        let contentSize = self.contentSize
+        tv.frame = NSRect(origin: .zero, size: contentSize)
+        tv.minSize = NSSize(width: 0, height: contentSize.height)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+
+        if let container = tv.textContainer {
+            container.widthTracksTextView = true
+            container.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)}
+        tv.isSelectable = true
         documentView = tv
         textView = tv
+
+
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
