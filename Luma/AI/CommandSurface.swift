@@ -552,11 +552,27 @@ private struct GrowingTextEditor: View {
     }
 }
 
-// MARK: - Enter-submitting NSTextView (Return sends, Shift+Return newline)
+// MARK: - Enter-submitting NSTextView (Return/Enter sends, Shift+Return newline)
+
+/// NSTextView subclass that submits on Enter/Return and inserts newline on Shift+Enter.
+private final class EnterSubmittingField: NSTextView {
+    var onSubmit: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36   // main Return
+        let isKeypadEnter = event.keyCode == 76
+        let isSubmitKey = (isReturn || isKeypadEnter) && !event.modifierFlags.contains(.shift)
+        if isSubmitKey {
+            onSubmit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
 
 private final class EnterSubmittingTextView: NSScrollView {
     private let onSubmit: (() -> Void)?
-    private var textView: NSTextView!
+    private var textView: EnterSubmittingField!
     var onTextChange: ((String) -> Void)?
     var fontSize: CGFloat = 13 { didSet { textView?.font = .systemFont(ofSize: fontSize) } }
 
@@ -570,7 +586,8 @@ private final class EnterSubmittingTextView: NSScrollView {
         borderType = .noBorder
         drawsBackground = false
 
-        let tv = NSTextView()
+        let tv = EnterSubmittingField()
+        tv.onSubmit = onSubmit
         tv.isRichText = false
         tv.drawsBackground = false
         tv.font = .systemFont(ofSize: fontSize)
@@ -592,8 +609,6 @@ private final class EnterSubmittingTextView: NSScrollView {
         tv.isSelectable = true
         documentView = tv
         textView = tv
-
-
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -604,14 +619,6 @@ private final class EnterSubmittingTextView: NSScrollView {
 
     func setText(_ string: String) {
         textView.string = string
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 36, !event.modifierFlags.contains(.shift) {
-            onSubmit?()
-            return
-        }
-        super.keyDown(with: event)
     }
 }
 
@@ -629,8 +636,9 @@ private struct EnterSubmittingTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: EnterSubmittingTextView, context: Context) {
-        if let tv = nsView.documentView as? NSTextView, tv.string != text {
-            tv.string = text
+        if let tv = nsView.documentView as? EnterSubmittingField {
+            if tv.string != text { tv.string = text }
+            tv.onSubmit = onSubmit
         }
         nsView.fontSize = fontSize
     }
