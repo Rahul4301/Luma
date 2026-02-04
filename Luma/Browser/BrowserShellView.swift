@@ -777,7 +777,11 @@ struct BrowserShellView: View {
     }
 }
 
-// MARK: - Start page (DIA-style: one tab, black glassmorphism, single centered search bar; no visible address bar)
+// MARK: - Start page (DIA-style: one tab, dark grey glassmorphism, single centered search bar; no visible address bar)
+
+/// Dark grey glassmorphism tint (opaque but see-through; matches dark reference).
+private let startPageGlassTint = Color(red: 0.06, green: 0.06, blue: 0.07)
+private let startPageGlassTintOpacity: Double = 0.82
 
 private struct StartPageView: View {
     @Binding var addressBarText: String
@@ -827,14 +831,14 @@ private struct StartPageView: View {
 
     var body: some View {
         ZStack {
-            // Black glassmorphism: opaque see-through (DIA-style)
+            // Dark grey glassmorphism: blur first (see-through), then dark tint (opaque, less transparent)
             ZStack {
-                Color.black.opacity(0.75)
                 VisualEffectView(
                     material: .hudWindow,
                     blendingMode: .behindWindow,
                     state: .active
                 )
+                startPageGlassTint.opacity(startPageGlassTintOpacity)
             }
             .ignoresSafeArea()
 
@@ -896,7 +900,7 @@ private struct StartPageSuggestionsList: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.black.opacity(0.5))
+                .fill(startPageGlassTint.opacity(startPageGlassTintOpacity * 0.7))
         )
     }
 }
