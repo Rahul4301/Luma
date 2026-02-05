@@ -1327,9 +1327,8 @@ private struct PanelResizeHandle: View {
             )
     }
 }
-// MARK: - Tab strip
-// No longer contains its own .padding(.leading, 72) — the parent applies
-// .padding(.leading, 78) to clear traffic lights.
+// MARK: - Tab strip (Chrome-style dynamic width: min/max, clamp, overflow)
+// Parent applies .padding(.leading, 78) to clear traffic lights.
 
 private struct TabStripView: View {
     @ObservedObject var tabManager: TabManager
@@ -1345,59 +1344,77 @@ private struct TabStripView: View {
     @State private var draggedTab: UUID? = nil
     private let rowHeight: CGFloat = 30
 
+    /// Chrome-style tab geometry: ideal = W/N, tabWidth = clamp(ideal, min, max); overflow → shrink to emergency min.
+    private static let minTabWidth: CGFloat = 80
+    private static let maxTabWidth: CGFloat = 240
+    private static let emergencyMinTabWidth: CGFloat = 44
+    private static let newTabButtonWidth: CGFloat = 32
+    private static let newTabGap: CGFloat = 4
+
     var body: some View {
-        HStack(spacing: 0) {
-            let count = tabManager.tabCount()
-            let tabWidth: CGFloat = count > 0 ? max(90, 180) : 0
+        GeometryReader { geometry in
+            let N = tabManager.tabCount()
+            let W = max(0, geometry.size.width - Self.newTabButtonWidth - Self.newTabGap)
+            let ideal = N > 0 ? W / CGFloat(N) : 0
+            // Chrome-style: roomy → clamp(ideal, min, max); cramped → shrink to emergency min so strip doesn’t overflow
+            let tabWidth: CGFloat = N > 0
+                ? min(Self.maxTabWidth, ideal >= Self.minTabWidth ? ideal : max(Self.emergencyMinTabWidth, ideal))
+                : 0
 
-            ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
-                TabPill(
-                    tabId: tabId,
-                    index: index + 1,
-                    url: tabManager.tabURL[tabId] ?? nil,
-                    title: tabManager.tabTitle[tabId],
-                    faviconURL: faviconURLByTab[tabId] ?? nil,
-                    isActive: tabManager.currentTab == tabId,
-                    contentAreaColor: contentAreaColor,
-                    chromeTextIsLight: chromeTextIsLight,
-                    onSelect: { onSwitch(tabId) },
-                    onClose: { onClose(tabId) }
-                )
-                .background(NonDraggableWindowView())
-                .frame(width: tabWidth, height: rowHeight)
-                .id(tabId)
-                .opacity(draggedTab == tabId ? 0.5 : 1.0)
-                .onDrag {
-                    draggedTab = tabId
-                    return NSItemProvider(object: tabId.uuidString as NSString)
+            HStack(spacing: 0) {
+                ForEach(Array(tabManager.tabOrder.enumerated()), id: \.element) { index, tabId in
+                    TabPill(
+                        tabId: tabId,
+                        index: index + 1,
+                        url: tabManager.tabURL[tabId] ?? nil,
+                        title: tabManager.tabTitle[tabId],
+                        faviconURL: faviconURLByTab[tabId] ?? nil,
+                        isActive: tabManager.currentTab == tabId,
+                        contentAreaColor: contentAreaColor,
+                        chromeTextIsLight: chromeTextIsLight,
+                        showTitle: tabWidth >= Self.minTabWidth,
+                        onSelect: { onSwitch(tabId) },
+                        onClose: { onClose(tabId) }
+                    )
+                    .background(NonDraggableWindowView())
+                    .frame(width: tabWidth, height: rowHeight)
+                    .id(tabId)
+                    .opacity(draggedTab == tabId ? 0.5 : 1.0)
+                    .onDrag {
+                        draggedTab = tabId
+                        return NSItemProvider(object: tabId.uuidString as NSString)
+                    }
+                    .onDrop(of: [.plainText], delegate: TabDropDelegate(
+                        destinationTab: tabId,
+                        tabs: tabManager.tabOrder,
+                        draggedTab: $draggedTab,
+                        onReorder: onReorder
+                    ))
                 }
-                .onDrop(of: [.plainText], delegate: TabDropDelegate(
-                    destinationTab: tabId,
-                    tabs: tabManager.tabOrder,
-                    draggedTab: $draggedTab,
-                    onReorder: onReorder
-                ))
-            }
 
-            Button(action: onNewTab) {
-                Image(systemName: "plus")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
-                    .frame(width: 32, height: rowHeight - 4)
-                    .contentShape(Rectangle())
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
-            }
-            .background(NonDraggableWindowView())
-            .buttonStyle(.plain)
-            .accessibilityLabel("New tab")
-            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
-                urlDropHandler(providers: providers)
-            }
+                Button(action: onNewTab) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 32, height: rowHeight - 4)
+                        .contentShape(Rectangle())
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.22).opacity(0.6)))
+                }
+                .background(NonDraggableWindowView())
+                .buttonStyle(.plain)
+                .accessibilityLabel("New tab")
+                .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
+                    urlDropHandler(providers: providers)
+                }
 
-            // Only the empty toolbar space moves the window; tabs stay stationary for reordering
-            WindowDragRegionView()
-                .frame(maxWidth: .infinity)
-                .allowsHitTesting(true)
+                // Only the empty toolbar space moves the window; tabs stay stationary for reordering
+                WindowDragRegionView()
+                    .frame(maxWidth: .infinity)
+                    .allowsHitTesting(true)
+            }
+            .frame(maxWidth: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: tabManager.tabCount())
+            .animation(.easeInOut(duration: 0.2), value: geometry.size.width)
         }
         .frame(maxWidth: .infinity)
         .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
@@ -1439,6 +1456,8 @@ private struct TabPill: View {
     let isActive: Bool
     let contentAreaColor: Color
     let chromeTextIsLight: Bool
+    /// When false (cramped strip), show only favicon to fit; when true, show title too.
+    let showTitle: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
     @State private var isHovered = false
@@ -1464,7 +1483,7 @@ private struct TabPill: View {
     var body: some View {
         HStack(spacing: 0) {
             Button(action: onSelect) {
-                HStack(spacing: 6) {
+                HStack(spacing: showTitle ? 6 : 0) {
                     Group {
                         if let url = url {
                             FaviconView(url: url, faviconURL: faviconURL)
@@ -1476,15 +1495,17 @@ private struct TabPill: View {
                         }
                     }
                     .frame(width: 14, height: 14, alignment: .center)
-                    Text(displayTitle)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(tabTextColor)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if showTitle {
+                        Text(displayTitle)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(tabTextColor)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(.leading, 8)
-                .padding(.trailing, 4)
+                .padding(.trailing, showTitle ? 4 : 6)
                 .padding(.vertical, 4)
                 .contentShape(Rectangle())
                 .frame(maxWidth: .infinity)
