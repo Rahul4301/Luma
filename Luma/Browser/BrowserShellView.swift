@@ -5,6 +5,14 @@ import AppKit
 import Combine
 import UniformTypeIdentifiers
 
+/// Holds address bar suggestion selection for keyboard (Up/Down/Enter) and autofill.
+private final class AddressBarKeyState: ObservableObject {
+    @Published var selectedIndex: Int = 0
+    @Published var totalCount: Int = 0
+    @Published var visible: Bool = false
+    @Published var submitSelection: Bool = false
+}
+
 /// Minimal browser shell hosting WKWebViews via WebViewWrapper and TabManager.
 ///
 /// Per SRS: WebKit-only renderer, minimal tab UI, address bar.
@@ -31,6 +39,7 @@ struct BrowserShellView: View {
     @FocusState private var addressBarFocused: Bool
     @State private var searchSuggestions: [String] = []
     @State private var historySuggestions: [(display: String, url: URL)] = []
+    @StateObject private var addressBarKeyState = AddressBarKeyState()
     @State private var suggestionDebounceTask: DispatchWorkItem?
     @State private var showDownloadsHub: Bool = false
     @State private var showGoogleAPIKeyHelpSheet: Bool = false
@@ -155,7 +164,11 @@ struct BrowserShellView: View {
                                         fetchSearchSuggestions(for: newValue)
                                     }
                                     .onChange(of: addressBarFocused) { _, focused in
-                                        if !focused { searchSuggestions = []; historySuggestions = [] }
+                                        if !focused {
+                                            searchSuggestions = []
+                                            historySuggestions = []
+                                            addressBarKeyState.visible = false
+                                        }
                                     }
 
                                 Image(systemName: "magnifyingglass")
@@ -320,15 +333,18 @@ struct BrowserShellView: View {
                         AddressBarSuggestionsList(
                             historyItems: historySuggestions,
                             searchPhrases: Array(searchSuggestions.prefix(5)),
+                            selectedIndex: addressBarKeyState.selectedIndex,
                             onSelectHistory: { url in
                                 searchSuggestions = []
                                 historySuggestions = []
+                                addressBarKeyState.visible = false
                                 navigateToURL(url)
                             },
                             onSelectSearch: { phrase in
                                 addressBarText = phrase
                                 searchSuggestions = []
                                 historySuggestions = []
+                                addressBarKeyState.visible = false
                                 navigateFromAddressBar()
                             }
                         )
@@ -338,6 +354,12 @@ struct BrowserShellView: View {
                         .padding(.top, addressBarHeight + chromePadding + 6)
                         .padding(.leading, chromePadding + 6 + 84 + 8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .onAppear {
+                            addressBarKeyState.visible = true
+                            addressBarKeyState.totalCount = historySuggestions.count + searchSuggestions.count
+                            addressBarKeyState.selectedIndex = 0
+                        }
+                        .onDisappear { addressBarKeyState.visible = false }
                     }
                 }
 
@@ -474,6 +496,25 @@ struct BrowserShellView: View {
                         return nil
                     }
                 }
+                // Address bar suggestions: Down/Up/Enter when dropdown is visible (keyboard selection + autofill)
+                if addressBarKeyState.visible {
+                    if event.keyCode == 125 { // Down
+                        DispatchQueue.main.async {
+                            addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex + 1, addressBarKeyState.totalCount - 1)
+                        }
+                        return nil
+                    }
+                    if event.keyCode == 126 { // Up
+                        DispatchQueue.main.async {
+                            addressBarKeyState.selectedIndex = max(0, addressBarKeyState.selectedIndex - 1)
+                        }
+                        return nil
+                    }
+                    if event.keyCode == 36 { // Return
+                        DispatchQueue.main.async { addressBarKeyState.submitSelection = true }
+                        return nil
+                    }
+                }
                 if event.keyCode == 53 {
                     DispatchQueue.main.async { restoreAddressBarOnEscape = true }
                     return nil
@@ -498,6 +539,35 @@ struct BrowserShellView: View {
                 syncAddressBarFromCurrentTab()
                 addressBarFocused = false
                 restoreAddressBarOnEscape = false
+            }
+        }
+        .onChange(of: addressBarKeyState.selectedIndex) { _, newValue in
+            guard addressBarKeyState.visible else { return }
+            let h = historySuggestions.count
+            let total = h + searchSuggestions.count
+            guard newValue >= 0, newValue < total else { return }
+            if newValue < h {
+                addressBarText = historySuggestions[newValue].url.absoluteString
+            } else {
+                addressBarText = searchSuggestions[newValue - h]
+            }
+        }
+        .onChange(of: addressBarKeyState.submitSelection) { _, new in
+            if new {
+                applySelectionAtIndex(addressBarKeyState.selectedIndex)
+                addressBarKeyState.submitSelection = false
+            }
+        }
+        .onChange(of: historySuggestions.count) { _, _ in
+            if addressBarKeyState.visible {
+                addressBarKeyState.totalCount = historySuggestions.count + searchSuggestions.count
+                addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex, max(0, addressBarKeyState.totalCount - 1))
+            }
+        }
+        .onChange(of: searchSuggestions.count) { _, _ in
+            if addressBarKeyState.visible {
+                addressBarKeyState.totalCount = historySuggestions.count + searchSuggestions.count
+                addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex, max(0, addressBarKeyState.totalCount - 1))
             }
         }
         .onDisappear {
@@ -598,12 +668,35 @@ struct BrowserShellView: View {
             || (first.url.host?.lowercased().contains(trimmed) ?? false) {
             searchSuggestions = []
             historySuggestions = []
+            addressBarKeyState.visible = false
             navigateToURL(first.url)
             return
         }
         searchSuggestions = []
         historySuggestions = []
+        addressBarKeyState.visible = false
         navigateFromAddressBar()
+    }
+
+    /// Apply the currently selected suggestion (keyboard Enter): navigate to URL or run search.
+    private func applySelectionAtIndex(_ index: Int) {
+        let h = historySuggestions.count
+        let total = h + searchSuggestions.count
+        guard index >= 0, index < total else { return }
+        if index < h {
+            let url = historySuggestions[index].url
+            searchSuggestions = []
+            historySuggestions = []
+            addressBarKeyState.visible = false
+            navigateToURL(url)
+        } else {
+            let phrase = searchSuggestions[index - h]
+            searchSuggestions = []
+            historySuggestions = []
+            addressBarKeyState.visible = false
+            addressBarText = phrase
+            navigateFromAddressBar()
+        }
     }
 
     private func navigateFromAddressBar() {
@@ -1151,14 +1244,19 @@ private struct GoogleAPIKeyHelpView: View {
 private struct AddressBarSuggestionsList: View {
     let historyItems: [(display: String, url: URL)]
     let searchPhrases: [String]
+    var selectedIndex: Int = 0
     let onSelectHistory: (URL) -> Void
     let onSelectSearch: (String) -> Void
     @State private var hoveredSection: String? = nil  // "h-0", "s-0", etc.
+
+    private func isSelected(historyIndex: Int) -> Bool { selectedIndex == historyIndex }
+    private func isSelected(searchIndex: Int) -> Bool { selectedIndex == historyItems.count + searchIndex }
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(historyItems.enumerated()), id: \.offset) { index, item in
                 let id = "h-\(index)"
+                let selected = isSelected(historyIndex: index)
                 Button(action: { onSelectHistory(item.url) }) {
                     HStack {
                         Image(systemName: "clock.arrow.circlepath")
@@ -1185,7 +1283,7 @@ private struct AddressBarSuggestionsList: View {
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
+                            .fill(selected || hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
                     )
                     .onHover { hovering in hoveredSection = hovering ? id : nil }
                 }
@@ -1193,9 +1291,8 @@ private struct AddressBarSuggestionsList: View {
             }
             ForEach(Array(searchPhrases.enumerated()), id: \.offset) { index, phrase in
                 let id = "s-\(index)"
-                Button(action: {
-                    onSelectSearch(phrase)
-                }) {
+                let selected = isSelected(searchIndex: index)
+                Button(action: { onSelectSearch(phrase) }) {
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 11))
@@ -1213,7 +1310,7 @@ private struct AddressBarSuggestionsList: View {
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
+                            .fill(selected || hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
                     )
                     .onHover { hovering in hoveredSection = hovering ? id : nil }
                 }

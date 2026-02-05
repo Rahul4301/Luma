@@ -206,24 +206,62 @@ final class HistoryManager: ObservableObject {
 
     // MARK: - URL bar autocomplete (history-based suggestions)
 
-    /// Returns address-bar suggestions from browsing history: URL or title contains query (substring match),
-    /// deduplicated by URL (most recent first). display = page title if present, else host or URL.
+    /// Returns address-bar suggestions from browsing history. Matches query against URL and page title.
+    /// Ranking: prefer (1) URLs with a meaningful path (e.g. discord.com/channels/@me over discord.com) so
+    /// signed-in / frequently used pages surface first; (2) higher visit count; (3) more recent.
+    /// display = page title if present, else host or URL.
     func urlAutocompleteSuggestions(prefix: String, limit: Int = 5) -> [(display: String, url: URL)] {
         let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !trimmed.isEmpty else { return [] }
-        var seen = Set<String>()
-        var result: [(display: String, url: URL)] = []
+
+        // Group by URL: (visitCount, mostRecentTimestamp, display from most recent title)
+        struct URLInfo {
+            var visitCount: Int
+            var mostRecent: Date
+            var display: String
+            var url: URL
+            var hasMeaningfulPath: Bool
+        }
+        var byURL: [String: URLInfo] = [:]
         for event in historyEvents where event.type == .pageVisit {
             guard let urlString = event.url, let url = URL(string: urlString) else { continue }
-            if seen.contains(urlString) { continue }
             let urlMatch = urlString.lowercased().contains(trimmed)
             let titleMatch = event.pageTitle?.lowercased().contains(trimmed) ?? false
             if !urlMatch && !titleMatch { continue }
-            seen.insert(urlString)
-            let display = (!(event.pageTitle?.isEmpty ?? true)) ? (event.pageTitle ?? "") : (url.host ?? url.absoluteString)
-            result.append((display: display, url: url))
-            if result.count >= limit { break }
+
+            let path = url.path
+            let hasPath = path.count > 1 && path != "/"
+
+            if let existing = byURL[urlString] {
+                let isNewer = event.timestamp > existing.mostRecent
+                let display = (!(event.pageTitle?.isEmpty ?? true)) ? (event.pageTitle ?? "") : (url.host ?? url.absoluteString)
+                byURL[urlString] = URLInfo(
+                    visitCount: existing.visitCount + 1,
+                    mostRecent: isNewer ? event.timestamp : existing.mostRecent,
+                    display: isNewer ? display : existing.display,
+                    url: url,
+                    hasMeaningfulPath: hasPath || existing.hasMeaningfulPath
+                )
+            } else {
+                let display = (!(event.pageTitle?.isEmpty ?? true)) ? (event.pageTitle ?? "") : (url.host ?? url.absoluteString)
+                byURL[urlString] = URLInfo(
+                    visitCount: 1,
+                    mostRecent: event.timestamp,
+                    display: display,
+                    url: url,
+                    hasMeaningfulPath: hasPath
+                )
+            }
         }
-        return result
+
+        let sorted = byURL.values.sorted { a, b in
+            // Prefer URLs with path (e.g. /channels/@me, /courses) over bare domain
+            if a.hasMeaningfulPath != b.hasMeaningfulPath { return a.hasMeaningfulPath }
+            // Then by visit count (more visits = more likely where user wants to go)
+            if a.visitCount != b.visitCount { return a.visitCount > b.visitCount }
+            // Then by recency
+            return a.mostRecent > b.mostRecent
+        }
+        return Array(sorted.prefix(limit).map { ($0.display, $0.url) })
     }
 }
