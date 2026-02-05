@@ -394,7 +394,9 @@ struct CommandSurfaceView: View {
                         emptyConversationState()
                     } else {
                         ForEach(messages) { msg in
-                            ChatBubble(message: msg, isUser: msg.role == .user, fontSize: chatFontSize)
+                            ChatBubble(message: msg, isUser: msg.role == .user, fontSize: chatFontSize) { url in
+                                openLinkInNewTab(url)
+                            }
                         }
                         if isSending {
                             loadingIndicator()
@@ -555,9 +557,11 @@ struct CommandSurfaceView: View {
         let message: ChatMessage
         let isUser: Bool
         let fontSize: CGFloat
+        let onLinkTapped: (URL) -> Void
 
         private let userBubbleColor = Color(white: 0.22)
         private let assistantTextColor = Color(white: 0.94)
+        private let linkColor = Color(red: 0.4, green: 0.6, blue: 1.0)
 
         var body: some View {
             HStack(alignment: .top, spacing: 0) {
@@ -577,10 +581,25 @@ struct CommandSurfaceView: View {
             }
         }
 
+        private func styledAttributedString() -> AttributedString? {
+            guard var attributed = try? AttributedString(markdown: message.text) else {
+                return nil
+            }
+            // Style links to be visible (blue + underlined)
+            for run in attributed.runs {
+                if run.link != nil {
+                    let range = run.range
+                    attributed[range].foregroundColor = linkColor
+                    attributed[range].underlineStyle = .single
+                }
+            }
+            return attributed
+        }
+
         @ViewBuilder
         private var messageTextView: some View {
             Group {
-                if let attributed = try? AttributedString(markdown: message.text) {
+                if let attributed = styledAttributedString() {
                     Text(attributed)
                 } else {
                     Text(message.text)
@@ -592,8 +611,20 @@ struct CommandSurfaceView: View {
             .multilineTextAlignment(.leading)
             .lineSpacing(isUser ? 0 : 5)
             .fixedSize(horizontal: false, vertical: true)
+            .environment(\.openURL, OpenURLAction { url in
+                onLinkTapped(url)
+                return .handled
+            })
             .accessibilityElement(children: .combine)
             .accessibilityLabel(isUser ? "You: \(message.text)" : "Assistant: \(message.text)")
+        }
+    }
+
+    private func openLinkInNewTab(_ url: URL) {
+        // Open URL in a new browser tab
+        if let tabManager = webViewWrapper.tabManager {
+            let newTabId = tabManager.newTab(url: url)
+            webViewWrapper.load(url: url, in: newTabId)
         }
     }
 
