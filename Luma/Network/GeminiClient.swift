@@ -88,7 +88,7 @@ final class GeminiClient {
             userMessage = """
             The user asks: \(prompt)
 
-            Use the following page context to answer (do not simply echo it back—summarize, explain, or respond to the question):
+            Use the following context (current page and/or uploaded documents) to answer. Do not simply echo it back—summarize, explain, cross-reference, or respond to the question:
 
             \(context)
             """
@@ -102,9 +102,9 @@ final class GeminiClient {
         ])
 
         let systemInstruction = """
-        You are Luma, a helpful browser assistant with full awareness of the page context.
-        You automatically receive the current page's title, URL, and content with every request.
-        Use this context proactively to provide relevant, contextual answers.
+        You are Luma, a helpful browser assistant with full awareness of the page context and any uploaded documents.
+        You automatically receive the current page's title, URL, and content with every request, and may also receive document contents (PDF, text, etc.) the user has attached.
+        Use this context proactively to provide relevant, contextual answers. When multiple documents or the page are provided, you may summarize, compare, or synthesize across them.
         
         You have access to the last few messages for immediate conversational context.
         \(conversationSummary != nil ? "\nPrevious conversation summary: \(conversationSummary!)" : "")

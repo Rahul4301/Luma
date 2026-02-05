@@ -2,6 +2,8 @@
 import Foundation
 import SwiftUI
 import AppKit
+import PDFKit
+import UniformTypeIdentifiers
 
 /// Right-side AI command panel (Cmd+E toggle). Per-tab chat with history.
 ///
@@ -36,6 +38,11 @@ struct CommandSurfaceView: View {
     @State private var pageText: String? = nil
     @State private var isLoadingContext: Bool = false
     @State private var contextRefreshTimer: Timer? = nil
+
+    // Attached documents (upload for AI context; user can add/remove)
+    @State private var attachedDocuments: [AttachedDocument] = []
+    @State private var documentPickerPresented: Bool = false
+    @State private var documentError: String? = nil
 
     /// Smooth, soft, calming: dark gray with slight warmth instead of pure black
     private let panelBg = Color(red: 0.09, green: 0.09, blue: 0.11)
@@ -99,6 +106,9 @@ struct CommandSurfaceView: View {
             .padding(.vertical, 8)
             .background(panelBgSecondary)
             .tint(textSecondary)
+
+            // Attached documents (multi-document context; add/remove; visible in "Context" above)
+            attachedDocumentsSection()
 
             // Chat history: plain free-form text (no bubbles)
             ScrollViewReader { proxy in
@@ -295,6 +305,16 @@ struct CommandSurfaceView: View {
                     .foregroundColor(Color(white: 0.65))
                     .lineLimit(2)
             }
+            if !attachedDocuments.isEmpty {
+                Text("Documents: \(attachedDocuments.map(\.displayName).joined(separator: ", "))")
+                    .foregroundColor(Color(white: 0.65))
+                    .lineLimit(2)
+                ForEach(attachedDocuments) { doc in
+                    Text("  “\(doc.displayName)”: \(doc.extractedText.prefix(80))\(doc.extractedText.count > 80 ? "…" : "")")
+                        .foregroundColor(Color(white: 0.55))
+                        .lineLimit(1)
+                }
+            }
             if isLoadingContext {
                 ProgressView()
                     .scaleEffect(0.6)
@@ -304,6 +324,127 @@ struct CommandSurfaceView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
+    private func attachedDocumentsSection() -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Attached documents")
+                    .font(.caption)
+                    .foregroundColor(textSecondary)
+                if !attachedDocuments.isEmpty {
+                    Text("(\(attachedDocuments.count))")
+                        .font(.caption2)
+                        .foregroundColor(textSecondary.opacity(0.8))
+                }
+                Spacer()
+                Button(action: { documentPickerPresented = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 12))
+                        Text("Add file")
+                            .font(.caption)
+                    }
+                    .foregroundColor(glowColorActive)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 6)
+
+            if let err = documentError {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundColor(.red.opacity(0.9))
+                    .padding(.horizontal, 18)
+            }
+
+            if !attachedDocuments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(attachedDocuments) { doc in
+                            HStack(spacing: 6) {
+                                Image(systemName: doc.displayName.hasSuffix(".pdf") ? "doc.fill" : "doc.text.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(textSecondary)
+                                Text(doc.displayName)
+                                    .font(.caption)
+                                    .foregroundColor(textPrimary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Button(action: { removeAttachedDocument(id: doc.id) }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(textSecondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(Color(white: 0.14))
+                            .clipShape(Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 6)
+                }
+                .frame(maxHeight: 32)
+            }
+        }
+        .background(panelBgSecondary.opacity(0.6))
+        .onDrop(of: [.fileURL, .pdf, .plainText, .utf8PlainText], isTargeted: nil) { providers in
+            handleDocumentDrop(providers: providers)
+        }
+        .fileImporter(
+            isPresented: $documentPickerPresented,
+            allowedContentTypes: [UTType.pdf, .plainText, .utf8PlainText, .commaSeparatedText, .xml, .html],
+            allowsMultipleSelection: true
+        ) { result in
+            documentError = nil
+            switch result {
+            case .success(let urls):
+                for url in urls {
+                    guard url.startAccessingSecurityScopedResource() else { continue }
+                    defer { url.stopAccessingSecurityScopedResource() }
+                    addDocument(from: url)
+                }
+            case .failure(let error):
+                documentError = error.localizedDescription
+            }
+        }
+    }
+
+    private func addDocument(from url: URL) {
+        guard DocumentTextExtractor.isSupported(url) else {
+            documentError = "Unsupported format. Use PDF, TXT, MD, JSON, CSV, XML, or HTML."
+            return
+        }
+        guard let text = DocumentTextExtractor.extractText(from: url), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            documentError = "Could not read text from “\(url.lastPathComponent)”."
+            return
+        }
+        let name = url.lastPathComponent
+        let doc = AttachedDocument(displayName: name, extractedText: text, fileURL: url)
+        attachedDocuments.append(doc)
+        documentError = nil
+    }
+
+    private func removeAttachedDocument(id: UUID) {
+        attachedDocuments.removeAll { $0.id == id }
+    }
+
+    private func handleDocumentDrop(providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) else {
+            return false
+        }
+        _ = provider.loadObject(ofClass: URL.self) { url, _ in
+            guard let u = url else { return }
+            DispatchQueue.main.async {
+                addDocument(from: u)
+            }
+        }
+        return true
+    }
+
     private func close() {
         stopContextRefreshTimer()
         isPresented = false
@@ -311,6 +452,7 @@ struct CommandSurfaceView: View {
         errorMessage = nil
         isSending = false
         actionProposedMessage = nil
+        attachedDocuments = []
     }
 
     /// Starts a timer to refresh context every 3 seconds.
@@ -369,7 +511,11 @@ struct CommandSurfaceView: View {
             parts.append("Selection:\n\(sel)")
         }
 
-        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+        for doc in attachedDocuments {
+            parts.append("Document \"\(doc.displayName)\":\n\(doc.textForContext)")
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
     private func sendCommand() {
@@ -658,5 +804,51 @@ private struct EnterSubmittingTextEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
         }
+    }
+}
+
+// MARK: - Attached documents (upload for AI context)
+
+private struct AttachedDocument: Identifiable {
+    let id: UUID
+    let displayName: String
+    let extractedText: String
+    let fileURL: URL?
+
+    init(id: UUID = UUID(), displayName: String, extractedText: String, fileURL: URL? = nil) {
+        self.id = id
+        self.displayName = displayName
+        self.extractedText = extractedText
+        self.fileURL = fileURL
+    }
+
+    /// Max chars per document in context to avoid token overflow.
+    static let maxCharsInContext: Int = 12_000
+
+    var textForContext: String {
+        if extractedText.count <= Self.maxCharsInContext { return extractedText }
+        return String(extractedText.prefix(Self.maxCharsInContext)) + "\n\n[Document truncated for length.]"
+    }
+}
+
+private enum DocumentTextExtractor {
+    static let supportedExtensions: Set<String> = ["pdf", "txt", "md", "json", "csv", "xml", "html"]
+
+    static func extractText(from url: URL) -> String? {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
+        case "pdf":
+            guard let doc = PDFDocument(url: url) else { return nil }
+            return doc.string
+        case "txt", "md", "json", "csv", "xml", "html":
+            return (try? String(contentsOf: url, encoding: .utf8))
+                ?? (try? String(contentsOf: url, encoding: .utf16))
+        default:
+            return nil
+        }
+    }
+
+    static func isSupported(_ url: URL) -> Bool {
+        supportedExtensions.contains(url.pathExtension.lowercased())
     }
 }
