@@ -203,4 +203,27 @@ final class HistoryManager: ObservableObject {
             return false
         }
     }
+
+    // MARK: - URL bar autocomplete (history-based suggestions)
+
+    /// Returns address-bar suggestions from browsing history: URL or title matches prefix,
+    /// deduplicated by URL (most recent first). display = page title if present, else host or URL.
+    func urlAutocompleteSuggestions(prefix: String, limit: Int = 5) -> [(display: String, url: URL)] {
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return [] }
+        var seen = Set<String>()
+        var result: [(display: String, url: URL)] = []
+        for event in historyEvents where event.type == .pageVisit {
+            guard let urlString = event.url, let url = URL(string: urlString) else { continue }
+            if seen.contains(urlString) { continue }
+            let urlMatch = urlString.lowercased().contains(trimmed)
+            let titleMatch = event.pageTitle?.lowercased().contains(trimmed) ?? false
+            if !urlMatch && !titleMatch { continue }
+            seen.insert(urlString)
+            let display = (!(event.pageTitle?.isEmpty ?? true)) ? (event.pageTitle ?? "") : (url.host ?? url.absoluteString)
+            result.append((display: display, url: url))
+            if result.count >= limit { break }
+        }
+        return result
+    }
 }

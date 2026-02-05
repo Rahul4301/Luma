@@ -30,8 +30,10 @@ struct BrowserShellView: View {
     @State private var isFirstLoad: Bool = true
     @FocusState private var addressBarFocused: Bool
     @State private var searchSuggestions: [String] = []
+    @State private var historySuggestions: [(display: String, url: URL)] = []
     @State private var suggestionDebounceTask: DispatchWorkItem?
     @State private var showDownloadsHub: Bool = false
+    @State private var showGoogleAPIKeyHelpSheet: Bool = false
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var downloadIconScale: CGFloat = 1
 
@@ -146,14 +148,14 @@ struct BrowserShellView: View {
                                     .foregroundColor(chromeText)
                                     .focused($addressBarFocused)
                                     .onSubmit {
-                                        searchSuggestions = []
-                                        navigateFromAddressBar()
+                                        applyAddressBarSubmit()
                                     }
                                     .onChange(of: addressBarText) { _, newValue in
+                                        historySuggestions = HistoryManager.shared.urlAutocompleteSuggestions(prefix: newValue, limit: 5)
                                         fetchSearchSuggestions(for: newValue)
                                     }
                                     .onChange(of: addressBarFocused) { _, focused in
-                                        if !focused { searchSuggestions = [] }
+                                        if !focused { searchSuggestions = []; historySuggestions = [] }
                                     }
 
                                 Image(systemName: "magnifyingglass")
@@ -239,15 +241,21 @@ struct BrowserShellView: View {
                         if isStartPage {
                             StartPageView(
                                 addressBarText: $addressBarText,
+                                historySuggestions: historySuggestions,
                                 searchSuggestions: Array(searchSuggestions.prefix(5)),
-                                onSelectSuggestion: { suggestion in
-                                    addressBarText = suggestion
+                                onSelectHistory: { url in
+                                    historySuggestions = []
+                                    searchSuggestions = []
+                                    navigateToURL(url)
+                                },
+                                onSelectSearch: { phrase in
+                                    addressBarText = phrase
+                                    historySuggestions = []
                                     searchSuggestions = []
                                     navigateFromAddressBar()
                                 },
                                 onSubmit: {
-                                    searchSuggestions = []
-                                    navigateFromAddressBar()
+                                    applyAddressBarSubmit()
                                 },
                                 onChangeAddressBar: { fetchSearchSuggestions(for: $0) }
                             )
@@ -266,7 +274,7 @@ struct BrowserShellView: View {
                             })
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
-                            ZStack {
+                            ZStack(alignment: .top) {
                                 WebViewContainer(webView: web.ensureWebView(for: currentId))
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .id(currentId)
@@ -275,10 +283,22 @@ struct BrowserShellView: View {
                                         .scaleEffect(0.8)
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 }
+                                if web.googleSuspiciousErrorDetected, currentURL?.host?.contains("aistudio.google.com") == true {
+                                    GoogleSuspiciousErrorBanner(
+                                        onDismiss: { web.clearGoogleSuspiciousErrorBanner() },
+                                        onLearnMore: { showGoogleAPIKeyHelpSheet = true }
+                                    )
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, 12)
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                                }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
                                 handleURLDrop(providers: providers, action: { navigateToURL($0) })
+                            }
+                            .sheet(isPresented: $showGoogleAPIKeyHelpSheet) {
+                                GoogleAPIKeyHelpView()
                             }
                         }
                     } else {
@@ -290,17 +310,25 @@ struct BrowserShellView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
                 .overlay(alignment: .topLeading) {
-                    // Search suggestions dropdown: only when address bar visible, non-empty query, max 5, with hover
+                    // Address bar suggestions: history (URL/title) first, then search; show when any suggestion exists
+                    let hasSuggestions = !historySuggestions.isEmpty || !searchSuggestions.isEmpty
                     if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil,
                        (tabManager.currentTab.flatMap { tabManager.tabURL[$0] ?? nil }?.absoluteString ?? "") != "about:blank",
                        addressBarFocused,
                        !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty,
-                       !searchSuggestions.isEmpty {
+                       hasSuggestions {
                         AddressBarSuggestionsList(
-                            suggestions: Array(searchSuggestions.prefix(5)),
-                            onSelect: {
-                                addressBarText = $0
+                            historyItems: historySuggestions,
+                            searchPhrases: Array(searchSuggestions.prefix(5)),
+                            onSelectHistory: { url in
                                 searchSuggestions = []
+                                historySuggestions = []
+                                navigateToURL(url)
+                            },
+                            onSelectSearch: { phrase in
+                                addressBarText = phrase
+                                searchSuggestions = []
+                                historySuggestions = []
                                 navigateFromAddressBar()
                             }
                         )
@@ -560,6 +588,24 @@ struct BrowserShellView: View {
         return URL(string: "https://www.google.com/search?q=" + encoded)
     }
 
+    /// Submit address bar: if first history suggestion matches typed prefix, go there; else resolve as URL or search.
+    private func applyAddressBarSubmit() {
+        let trimmed = addressBarText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !trimmed.isEmpty,
+           let first = historySuggestions.first,
+           first.display.lowercased().hasPrefix(trimmed)
+            || first.url.absoluteString.lowercased().contains(trimmed)
+            || (first.url.host?.lowercased().contains(trimmed) ?? false) {
+            searchSuggestions = []
+            historySuggestions = []
+            navigateToURL(first.url)
+            return
+        }
+        searchSuggestions = []
+        historySuggestions = []
+        navigateFromAddressBar()
+    }
+
     private func navigateFromAddressBar() {
         guard let url = resolveToURL(addressBarText) else { return }
         navigateToURL(url)
@@ -785,8 +831,10 @@ private let startPageGlassTintOpacity: Double = 0.82
 
 private struct StartPageView: View {
     @Binding var addressBarText: String
+    let historySuggestions: [(display: String, url: URL)]
     let searchSuggestions: [String]
-    let onSelectSuggestion: (String) -> Void
+    let onSelectHistory: (URL) -> Void
+    let onSelectSearch: (String) -> Void
     let onSubmit: () -> Void
     let onChangeAddressBar: (String) -> Void
 
@@ -794,9 +842,10 @@ private struct StartPageView: View {
 
     private let textMuted = Color.white.opacity(0.5)
 
-    /// Show suggestions only when search bar has text (not empty).
+    /// Show suggestions when we have history or search suggestions and bar has text.
     private var showSuggestions: Bool {
-        searchFocused && !searchSuggestions.isEmpty && !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty
+        let hasAny = !historySuggestions.isEmpty || !searchSuggestions.isEmpty
+        return searchFocused && hasAny && !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Search bar only (stationary in center); suggestions shown in overlay below so bar never moves.
@@ -842,15 +891,17 @@ private struct StartPageView: View {
             }
             .ignoresSafeArea()
 
-            // Search bar fixed in center; suggestions in overlay directly below the bar
+            // Search bar fixed in center; suggestions in overlay directly below the bar (history first, then search)
             searchBar
                 .overlay(alignment: .top) {
                     if showSuggestions {
                         VStack(spacing: 0) {
                             Spacer().frame(height: 48 + 8) // bar height + gap
                             StartPageSuggestionsList(
-                                suggestions: searchSuggestions,
-                                onSelect: onSelectSuggestion
+                                historyItems: historySuggestions,
+                                searchPhrases: searchSuggestions,
+                                onSelectHistory: onSelectHistory,
+                                onSelectSearch: onSelectSearch
                             )
                         }
                         .frame(maxWidth: 560)
@@ -863,21 +914,58 @@ private struct StartPageView: View {
 }
 
 private struct StartPageSuggestionsList: View {
-    let suggestions: [String]
-    let onSelect: (String) -> Void
-    @State private var hoveredIndex: Int? = nil
+    let historyItems: [(display: String, url: URL)]
+    let searchPhrases: [String]
+    let onSelectHistory: (URL) -> Void
+    let onSelectSearch: (String) -> Void
+    @State private var hoveredId: String? = nil
     private let textMuted = Color.white.opacity(0.5)
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.element) { index, suggestion in
-                Button(action: { onSelect(suggestion) }) {
+            ForEach(Array(historyItems.enumerated()), id: \.offset) { index, item in
+                let id = "h-\(index)"
+                Button(action: { onSelectHistory(item.url) }) {
+                    HStack {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 11))
+                            .foregroundColor(textMuted)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.display)
+                                .font(.system(size: 13))
+                                .foregroundColor(.white.opacity(0.95))
+                                .lineLimit(1)
+                            if let host = item.url.host, host != item.display {
+                                Text(host)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(textMuted)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: 560, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(hoveredId == id ? Color.white.opacity(0.12) : Color.clear)
+                    )
+                    .onHover { hovering in hoveredId = hovering ? id : nil }
+                }
+                .buttonStyle(.plain)
+            }
+            ForEach(Array(searchPhrases.enumerated()), id: \.offset) { index, phrase in
+                let id = "s-\(index)"
+                Button(action: { onSelectSearch(phrase) }) {
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 11))
                             .foregroundColor(textMuted)
                             .frame(width: 20)
-                        Text(suggestion)
+                        Text(phrase)
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.9))
                             .lineLimit(1)
@@ -889,11 +977,9 @@ private struct StartPageSuggestionsList: View {
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(hoveredIndex == index ? Color.white.opacity(0.12) : Color.clear)
+                            .fill(hoveredId == id ? Color.white.opacity(0.12) : Color.clear)
                     )
-                    .onHover { hovering in
-                        hoveredIndex = hovering ? index : nil
-                    }
+                    .onHover { hovering in hoveredId = hovering ? id : nil }
                 }
                 .buttonStyle(.plain)
             }
@@ -988,23 +1074,134 @@ private struct DownloadsHubView: View {
     }
 }
 
-// MARK: - Address bar suggestions (hover indicator)
+// MARK: - Google “suspicious request” banner + help (DIA-style: explain it’s Google’s decision, not Luma)
+
+private struct GoogleSuspiciousErrorBanner: View {
+    let onDismiss: () -> Void
+    let onLearnMore: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 16))
+                .foregroundColor(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Google is blocking API key creation for this request.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.primary)
+                Text("This is a Google security decision, not a problem with Luma.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Learn more") { onLearnMore() }
+                .buttonStyle(.borderedProminent)
+            Button("Dismiss") { onDismiss() }
+                .buttonStyle(.bordered)
+        }
+        .padding(14)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.95))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .shadow(color: .black.opacity(0.15), radius: 8)
+    }
+}
+
+private struct GoogleAPIKeyHelpView: View {
+    @Environment(\.dismiss) private var dismiss
+    private let googleSecurityURL = URL(string: "https://myaccount.google.com/security")!
+    private let aiStudioURL = URL(string: "https://aistudio.google.com/app/apikey")!
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Text("Trouble creating Google AI keys?")
+                    .font(.system(size: 18, weight: .semibold))
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(.bottom, 4)
+            Text("When you see “The request is suspicious” on Google AI Studio, Google’s systems are blocking that action — for example because of account type, region, network, or past security events. Luma cannot override this.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("What you can do:")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("• Check your Google Account security and sign-in history.")
+                Text("• Try again later or from a different network.")
+                Text("• Create the API key in Chrome or Safari, then paste it into Luma Settings.")
+            }
+            .font(.system(size: 13))
+            .foregroundColor(.primary)
+            Spacer()
+            HStack(spacing: 12) {
+                Link("Google Account security", destination: googleSecurityURL)
+                Link("Google AI Studio", destination: aiStudioURL)
+            }
+            .font(.system(size: 12))
+        }
+        .padding(24)
+        .frame(minWidth: 420, minHeight: 320)
+    }
+}
+
+// MARK: - Address bar suggestions (history first, then search)
 
 private struct AddressBarSuggestionsList: View {
-    let suggestions: [String]
-    let onSelect: (String) -> Void
-    @State private var hoveredIndex: Int? = nil
+    let historyItems: [(display: String, url: URL)]
+    let searchPhrases: [String]
+    let onSelectHistory: (URL) -> Void
+    let onSelectSearch: (String) -> Void
+    @State private var hoveredSection: String? = nil  // "h-0", "s-0", etc.
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.element) { index, suggestion in
-                Button(action: { onSelect(suggestion) }) {
+            ForEach(Array(historyItems.enumerated()), id: \.offset) { index, item in
+                let id = "h-\(index)"
+                Button(action: { onSelectHistory(item.url) }) {
+                    HStack {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.display)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            if let host = item.url.host, host != item.display {
+                                Text(host)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
+                    )
+                    .onHover { hovering in hoveredSection = hovering ? id : nil }
+                }
+                .buttonStyle(.plain)
+            }
+            ForEach(Array(searchPhrases.enumerated()), id: \.offset) { index, phrase in
+                let id = "s-\(index)"
+                Button(action: {
+                    onSelectSearch(phrase)
+                }) {
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .frame(width: 20)
-                        Text(suggestion)
+                        Text(phrase)
                             .font(.system(size: 13))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -1016,11 +1213,9 @@ private struct AddressBarSuggestionsList: View {
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(hoveredIndex == index ? Color.primary.opacity(0.06) : Color.clear)
+                            .fill(hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
                     )
-                    .onHover { hovering in
-                        hoveredIndex = hovering ? index : nil
-                    }
+                    .onHover { hovering in hoveredSection = hovering ? id : nil }
                 }
                 .buttonStyle(.plain)
             }

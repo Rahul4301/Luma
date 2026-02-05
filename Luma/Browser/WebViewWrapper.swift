@@ -8,7 +8,17 @@ import AppKit
 /// Manages one WKWebView per tab. Safe configuration, no message handlers.
 /// Exposes page theme (background color) for chrome unification.
 /// Handles file downloads via WKDownloadDelegate; saves to ~/Downloads and notifies DownloadManager.
+///
+/// Passwords & login: Uses persistent WKWebsiteDataStore.default() and a shared process pool
+/// so cookies, localStorage, and site data (including credentials the system may use for
+/// autofill) are saved and shared across tabs. Autofill of saved credentials works when
+/// sites use standard autocomplete attributes. The system "Save Password" prompt is a
+/// WebKit limitation in embedded WKWebView and may not appear; credentials saved in
+/// Safari or elsewhere can still be used here when the system offers them.
 final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
+    /// Shared process pool so all tabs share the same credential/cookie store.
+    private static let sharedProcessPool = WKProcessPool()
+
     private var webViews: [UUID: WKWebView] = [:]
     private(set) var activeTab: UUID?
     @Published var currentURL: URL?
@@ -42,6 +52,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Favicon URLs per tab (extracted from page <link rel="icon">)
     @Published var faviconURLByTab: [UUID: URL?] = [:]
     
+    /// When true, Google AI Studio showed "request is suspicious" — show in-app explanation (Google’s decision, not a Luma bug).
+    @Published var googleSuspiciousErrorDetected: Bool = false
+    
     /// TabManager reference for updating titles
     weak var tabManager: TabManager?
 
@@ -53,8 +66,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }()
 
     /// Script runs at documentEnd so theme color is available as soon as the page renders (O(1) relative to load).
+    /// On Google domains we skip so we don't inject any custom behavior (avoids "request is suspicious" for API key flow).
     private static let themeScriptSource = """
         (function(){
+            var host = (window.location && window.location.hostname) ? window.location.hostname : '';
+            if (host.endsWith('google.com') || host.endsWith('googleapis.com') || host.endsWith('googleusercontent.com') || host.endsWith('gstatic.com')) return;
             var el = document.body || document.documentElement;
             if (!el) return;
             var bg = window.getComputedStyle(el).backgroundColor;
@@ -70,19 +86,58 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         })();
         """
 
-    /// User-Agent matching current Safari on macOS so Google Workspace / Gmail treat the app as a supported browser.
-    private static let safariLikeUserAgent =
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+    /// User-Agent: standard Chromium on macOS so Google (Gmail, AI Studio, Cloud Console) treats the app as a normal browser.
+    /// Avoids "request is suspicious" / bot detection when signing in or creating API keys.
+    private static let chromeLikeUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    /// Detects "Failed to generate API key, The request is suspicious" on AI Studio so we can show an in-app explanation.
+    private static let googleSuspiciousErrorScriptSource = """
+        (function(){
+            if (!window.location.hostname || window.location.hostname.indexOf('aistudio.google.com') === -1) return;
+            function check(){
+                var b = document.body; if (!b) return;
+                var t = (b.innerText || b.textContent || '').toLowerCase();
+                if (t.indexOf('request is suspicious') !== -1 || t.indexOf('failed to generate api key') !== -1) {
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lumaGoogleSuspiciousError) {
+                        window.webkit.messageHandlers.lumaGoogleSuspiciousError.postMessage({});
+                    }
+                }
+            }
+            setTimeout(check, 1500); setTimeout(check, 3500);
+        })();
+        """
+
+    private lazy var googleSuspiciousErrorHandler: GoogleSuspiciousErrorHandler = {
+        let h = GoogleSuspiciousErrorHandler()
+        h.wrapper = self
+        return h
+    }()
+
+    func clearGoogleSuspiciousErrorBanner() {
+        DispatchQueue.main.async { [weak self] in
+            self?.googleSuspiciousErrorDetected = false
+        }
+    }
 
     func ensureWebView(for tabId: UUID) -> WKWebView {
         if let wv = webViews[tabId] { return wv }
         let config = WKWebViewConfiguration()
+        config.processPool = WebViewWrapper.sharedProcessPool
         config.websiteDataStore = .default()
+        // Explicitly enable JavaScript and normal storage so Google sign-in / API key flows work (cookies, localStorage).
+        config.preferences.javaScriptEnabled = true
+        if #available(macOS 11.0, *) {
+            config.defaultWebpagePreferences.allowsContentJavaScript = true
+        }
         config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
+        config.userContentController.add(googleSuspiciousErrorHandler, name: "lumaGoogleSuspiciousError")
         let themeScript = WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(themeScript)
+        let googleErrorScript = WKUserScript(source: WebViewWrapper.googleSuspiciousErrorScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        config.userContentController.addUserScript(googleErrorScript)
         let wv = WKWebView(frame: .zero, configuration: config)
-        wv.customUserAgent = WebViewWrapper.safariLikeUserAgent
+        wv.customUserAgent = WebViewWrapper.chromeLikeUserAgent
         wv.navigationDelegate = self
         wv.uiDelegate = self
         webViews[tabId] = wv
@@ -132,7 +187,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             let readAccessTo = url.deletingLastPathComponent()
             wv.loadFileURL(url, allowingReadAccessTo: readAccessTo)
         } else {
-            let request = URLRequest(url: url)
+            var request = URLRequest(url: url)
+            request.httpShouldHandleCookies = true
             wv.load(request)
         }
         if activeTab == tabId {
@@ -324,6 +380,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         if navigationAction.shouldPerformDownload {
             decisionHandler(.download, preferences)
         } else {
+            // Ensure JavaScript and normal web behavior so Google sign-in / API key flows work (no script blocking).
+            preferences.allowsContentJavaScript = true
             decisionHandler(.allow, preferences)
         }
     }
@@ -513,6 +571,18 @@ private final class ThemeMessageHandler: NSObject, WKScriptMessageHandler {
                 wrapper.pageThemeByTab.removeValue(forKey: tabId)
             }
             wrapper.updatePageThemeForActiveTab()
+        }
+    }
+}
+
+// MARK: - Google “suspicious request” handler (shows in-app explanation so users know it’s Google’s decision, not Luma)
+
+private final class GoogleSuspiciousErrorHandler: NSObject, WKScriptMessageHandler {
+    weak var wrapper: WebViewWrapper?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        DispatchQueue.main.async { [weak self] in
+            self?.wrapper?.googleSuspiciousErrorDetected = true
         }
     }
 }
