@@ -206,7 +206,7 @@ final class HistoryManager: ObservableObject {
 
     // MARK: - URL bar autocomplete (history-based suggestions)
 
-    /// Returns address-bar suggestions from browsing history: URL or title matches prefix,
+    /// Returns address-bar suggestions from browsing history: URL or title contains query (substring match),
     /// deduplicated by URL (most recent first). display = page title if present, else host or URL.
     func urlAutocompleteSuggestions(prefix: String, limit: Int = 5) -> [(display: String, url: URL)] {
         let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
