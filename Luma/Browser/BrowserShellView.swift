@@ -471,6 +471,13 @@ struct BrowserShellView: View {
                         }
                         return nil
                     }
+                    // Cmd+P: print current page
+                    if key == "p" {
+                        DispatchQueue.main.async {
+                            if let id = tabManager.currentTab { web.printPage(in: id) }
+                        }
+                        return nil
+                    }
                     // Cmd+1...9: switch to tab by index
                     if key >= "1", key <= "9", let idx = Int(key), idx >= 1, idx <= 9 {
                         DispatchQueue.main.async {

@@ -91,6 +91,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private static let chromeLikeUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+    /// Some sites (notably certain library resolvers / enterprise portals) behave poorly with a spoofed UA
+    /// inside embedded WebKit and may render a blank page. For these hosts, prefer the default WKWebView UA.
+    private static func shouldUseDefaultUserAgent(for url: URL?) -> Bool {
+        guard let host = url?.host?.lowercased() else { return false }
+        // Ex Libris Alma/Primo resolvers
+        if host.contains("exlibrisgroup.com") { return true }
+        if host.contains("primo.exlibrisgroup.com") { return true }
+        return false
+    }
+
     /// Detects "Failed to generate API key, The request is suspicious" on AI Studio so we can show an in-app explanation.
     private static let googleSuspiciousErrorScriptSource = """
         (function(){
@@ -127,6 +137,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         config.websiteDataStore = .default()
         // Explicitly enable JavaScript and normal storage so Google sign-in / API key flows work (cookies, localStorage).
         config.preferences.javaScriptEnabled = true
+        // Enable Web Inspector + "Inspect Element" in context menu (macOS WebKit Developer Extras).
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         if #available(macOS 11.0, *) {
             config.defaultWebpagePreferences.allowsContentJavaScript = true
         }
@@ -137,6 +149,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let googleErrorScript = WKUserScript(source: WebViewWrapper.googleSuspiciousErrorScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(googleErrorScript)
         let wv = WKWebView(frame: .zero, configuration: config)
+        // Default to Chrome-like UA, but allow host-based fallback to WebKit UA when needed.
         wv.customUserAgent = WebViewWrapper.chromeLikeUserAgent
         wv.navigationDelegate = self
         wv.uiDelegate = self
@@ -161,6 +174,38 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return wv
     }
 
+    // MARK: - Printing
+
+    /// Print the current page in the given tab (Cmd+P).
+    func printPage(in tabId: UUID) {
+        guard let wv = webViews[tabId] else { return }
+        
+        DispatchQueue.main.async {
+            let printInfo = NSPrintInfo.shared
+            printInfo.horizontalPagination = .fit
+            printInfo.verticalPagination = .fit
+            printInfo.isHorizontallyCentered = true
+            printInfo.isVerticallyCentered = true
+            
+            let op = wv.printOperation(with: printInfo)
+            
+            // CRITICAL: Set the view's frame to avoid the crash:
+            // "The NSPrintOperation view's frame was not initialized properly before knowsPageRange:"
+            // The frame must be at least 100x100; it auto-resizes after.
+            op.view?.frame = NSRect(x: 0, y: 0, width: max(wv.bounds.width, 100), height: max(wv.bounds.height, 100))
+            
+            op.showsPrintPanel = true
+            op.showsProgressPanel = true
+            
+            // Run modally attached to the window
+            if let window = wv.window ?? NSApp.keyWindow ?? NSApp.mainWindow {
+                op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+            } else {
+                op.run()
+            }
+        }
+    }
+
     func tabId(for webView: WKWebView) -> UUID? {
         webViews.first(where: { $0.value === webView })?.key
     }
@@ -182,6 +227,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func load(url: URL, in tabId: UUID) {
         let wv = ensureWebView(for: tabId)
+        // Per-host UA override (some hosts blank-screen with spoofed UA).
+        if Self.shouldUseDefaultUserAgent(for: url) {
+            wv.customUserAgent = nil
+        } else {
+            wv.customUserAgent = Self.chromeLikeUserAgent
+        }
         if url.isFileURL {
             // Use loadFileURL so PDF/Word/etc. display in-browser like Chrome (sandbox-safe)
             let readAccessTo = url.deletingLastPathComponent()
@@ -386,14 +437,27 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         decisionHandler(.allow, preferences)
     }
 
-    /// MIME types we display in the WebView (including PDF and Word); others download.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        let url = webView.url?.absoluteString ?? "(unknown url)"
+        print("WKWebView didFailProvisionalNavigation:", url, error.localizedDescription)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        let url = webView.url?.absoluteString ?? "(unknown url)"
+        print("WKWebView didFail:", url, error.localizedDescription)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        let url = webView.url?.absoluteString ?? "(unknown url)"
+        print("WKWebView process terminated:", url)
+    }
+
+    /// MIME types we display in the WebView (PDF + web/image types). Word docs download to avoid gibberish.
     private static let displayableMIMETypes: Set<String> = [
         "text/html", "text/plain", "text/css", "text/javascript", "application/javascript",
         "application/json", "application/xml", "image/svg+xml",
         "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "image/x-icon",
-        "application/pdf",
-        "application/msword", // .doc
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" // .docx
+        "application/pdf"
     ]
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
@@ -402,29 +466,43 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             decisionHandler(.allow)
             return
         }
-        // 1) Server says "save as file" → always download
+        // 1) HTTP redirect (3xx): always allow so redirect chains (e.g. library resolvers, SSO) complete
+        if let http = navigationResponse.response as? HTTPURLResponse,
+           (300...399).contains(http.statusCode) {
+            decisionHandler(.allow)
+            return
+        }
+        // 2) Server says "save as file" → always download
         if let http = navigationResponse.response as? HTTPURLResponse,
            let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
            disposition.lowercased().contains("attachment") {
             decisionHandler(.download)
             return
         }
-        // 2) Main-frame navigation to remote image/* (HEIC, PNG, JPEG, etc.): download to Downloads
+        // 3) Main-frame navigation to remote image/* (HEIC, PNG, JPEG, etc.): download to Downloads
         //    (subresources like <img> on a page stay allowed so images display)
         let scheme = navigationResponse.response.url?.scheme?.lowercased()
         let mime = (navigationResponse.response.mimeType ?? "").lowercased()
+        let requestURL = navigationResponse.response.url
         if navigationResponse.isForMainFrame,
            (scheme == "http" || scheme == "https"),
            mime.hasPrefix("image/") {
             decisionHandler(.download)
             return
         }
-        // 3) Display only web/document content; all other types (PDF, Word, etc.) download
+        // 4) Display web/document content; always allow resolver/document URLs (e.g. Primo, Alma) even with wrong MIME
+        if navigationResponse.isForMainFrame, (scheme == "http" || scheme == "https"),
+           Self.looksLikeDocumentURL(requestURL) {
+            decisionHandler(.allow)
+            return
+        }
+        // 5) Standard displayable types
         let isDisplayable: Bool = {
             if mime.isEmpty { return true }
             if Self.displayableMIMETypes.contains(mime) { return true }
             if mime.hasPrefix("image/") { return true }
             if mime.hasPrefix("text/") { return true }
+            if mime == "application/xhtml+xml" { return true }
             return false
         }()
         if isDisplayable && navigationResponse.canShowMIMEType {
@@ -432,6 +510,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         } else {
             decisionHandler(.download)
         }
+    }
+
+    /// URLs that are typically HTML documents (resolvers, .do, /view/, etc.) so we allow display even when MIME is wrong.
+    private static func looksLikeDocumentURL(_ url: URL?) -> Bool {
+        guard let url = url else { return false }
+        let s = url.absoluteString.lowercased()
+        let path = url.path.lowercased()
+        return path.contains("/view/") || path.contains("/action/") || path.hasSuffix(".do") || s.contains("uresolver") || s.contains("resolver")
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -543,18 +629,54 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     // MARK: - WKUIDelegate
 
-    /// Open target="_blank" / window.open() and redirect links in a new tab instead of blocking.
+    /// Handle `target="_blank"` / `window.open()` by creating a new tab *and returning a real WKWebView*.
+    ///
+    /// Important: returning `nil` breaks flows that depend on the opener relationship and/or the browser
+    /// performing the navigation (proper `Referer`, cookies, redirects, and window scripting). Many library
+    /// resolvers (Primo/Alma) rely on this behavior.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard navigationAction.targetFrame == nil,
-              let requestURL = navigationAction.request.url,
+        guard navigationAction.targetFrame == nil else { return nil }
+        guard let requestURL = navigationAction.request.url,
               let scheme = requestURL.scheme?.lowercased(),
               (scheme == "http" || scheme == "https" || scheme == "file") else {
             return nil
         }
         guard let tabManager = tabManager else { return nil }
+
+        // Create a new tab and *return* its webview so WebKit performs the navigation with correct headers.
         let id = tabManager.newTab(url: requestURL)
-        load(url: requestURL, in: id)
-        return nil
+        // IMPORTANT: the returned WKWebView must be created with the provided `configuration`,
+        // otherwise WebKit throws: "Returned WKWebView was not created with the given configuration."
+        configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        let wv = WKWebView(frame: .zero, configuration: configuration)
+        if Self.shouldUseDefaultUserAgent(for: requestURL) {
+            wv.customUserAgent = nil
+        } else {
+            wv.customUserAgent = WebViewWrapper.chromeLikeUserAgent
+        }
+        wv.navigationDelegate = self
+        wv.uiDelegate = self
+        webViews[id] = wv
+
+        // Observe title changes for this tab
+        let titleObservation = wv.observe(\.title, options: [.new]) { [weak self, id] webView, _ in
+            guard let self = self, let title = webView.title, !title.isEmpty else { return }
+            DispatchQueue.main.async {
+                self.tabManager?.updateTitle(tab: id, title: title)
+            }
+        }
+        titleObservations[id] = titleObservation
+
+        // Observe URL changes to fetch favicon
+        let urlObservation = wv.observe(\.url, options: [.new]) { [weak self, id] webView, _ in
+            guard let self = self, webView.url != nil else { return }
+            self.fetchFavicon(for: id, webView: webView)
+        }
+        urlObservations[id] = urlObservation
+
+        setActiveTab(id)
+        // Do NOT call `load()` here — WebKit will load `navigationAction.request` into the returned webview.
+        return wv
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
