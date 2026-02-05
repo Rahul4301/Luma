@@ -379,11 +379,26 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
         if navigationAction.shouldPerformDownload {
             decisionHandler(.download, preferences)
-        } else {
-            // Ensure JavaScript and normal web behavior so Google sign-in / API key flows work (no script blocking).
-            preferences.allowsContentJavaScript = true
-            decisionHandler(.allow, preferences)
+            return
         }
+        // Ensure JavaScript and normal web behavior so Google sign-in / API key flows work (no script blocking).
+        preferences.allowsContentJavaScript = true
+
+        // Open any link click in a new tab (same for target="_self" and target="_blank").
+        if navigationAction.navigationType == .linkActivated,
+           let url = navigationAction.request.url,
+           let scheme = url.scheme?.lowercased(),
+           (scheme == "http" || scheme == "https" || scheme == "file") {
+            decisionHandler(.cancel, preferences)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, let tabManager = self.tabManager else { return }
+                let id = tabManager.newTab(url: url)
+                self.load(url: url, in: id)
+            }
+            return
+        }
+
+        decisionHandler(.allow, preferences)
     }
 
     /// MIME types we display in the WebView; everything else (PDF, Word, ZIP, etc.) downloads.
