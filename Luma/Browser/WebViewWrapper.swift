@@ -383,29 +383,17 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
         // Ensure JavaScript and normal web behavior so Google sign-in / API key flows work (no script blocking).
         preferences.allowsContentJavaScript = true
-
-        // Open any link click in a new tab (same for target="_self" and target="_blank").
-        if navigationAction.navigationType == .linkActivated,
-           let url = navigationAction.request.url,
-           let scheme = url.scheme?.lowercased(),
-           (scheme == "http" || scheme == "https" || scheme == "file") {
-            decisionHandler(.cancel, preferences)
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self, let tabManager = self.tabManager else { return }
-                let id = tabManager.newTab(url: url)
-                self.load(url: url, in: id)
-            }
-            return
-        }
-
         decisionHandler(.allow, preferences)
     }
 
-    /// MIME types we display in the WebView; everything else (PDF, Word, ZIP, etc.) downloads.
+    /// MIME types we display in the WebView (including PDF and Word); others download.
     private static let displayableMIMETypes: Set<String> = [
         "text/html", "text/plain", "text/css", "text/javascript", "application/javascript",
         "application/json", "application/xml", "image/svg+xml",
-        "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "image/x-icon"
+        "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "image/x-icon",
+        "application/pdf",
+        "application/msword", // .doc
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" // .docx
     ]
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
@@ -553,7 +541,21 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         DownloadManager.shared.addDownload(url: requestURL, fileURL: info.fileURL, suggestedFilename: info.suggestedFilename)
     }
 
-    // MARK: - WKUIDelegate (native file picker for <input type="file">)
+    // MARK: - WKUIDelegate
+
+    /// Open target="_blank" / window.open() and redirect links in a new tab instead of blocking.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard navigationAction.targetFrame == nil,
+              let requestURL = navigationAction.request.url,
+              let scheme = requestURL.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https" || scheme == "file") else {
+            return nil
+        }
+        guard let tabManager = tabManager else { return nil }
+        let id = tabManager.newTab(url: requestURL)
+        load(url: requestURL, in: id)
+        return nil
+    }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
         let panel = NSOpenPanel()
