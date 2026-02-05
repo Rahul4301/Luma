@@ -27,9 +27,9 @@ private enum PanelTokens {
 /// Cross-tab affordance microcopy (≤50 characters).
 private let otherTabsMicrocopy = "Add context from other tabs (coming soon)"
 
-/// Glassmorphism (matches start page): dark grey blur + tint.
-private let panelGlassTint = Color(red: 0.06, green: 0.06, blue: 0.07)
-private let panelGlassTintOpacity: Double = 0.82
+/// Glassmorphism: darker grey blur + tint; shinier via subtle highlight.
+private let panelGlassTint = Color(red: 0.03, green: 0.03, blue: 0.04)
+private let panelGlassTintOpacity: Double = 0.90
 
 /// Right-side AI command panel (Cmd+E toggle). Per-tab chat with history.
 ///
@@ -83,9 +83,19 @@ struct CommandSurfaceView: View {
                     state: .active
                 )
                 panelGlassTint.opacity(panelGlassTintOpacity)
+                // Subtle top-edge shine
+                LinearGradient(
+                    colors: [Color.white.opacity(0.04), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: PanelTokens.cornerRadiusLarge, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: PanelTokens.cornerRadiusLarge, style: .continuous)
+                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
         .onAppear {
             loadPageContext()
             startContextRefreshTimer()
@@ -128,7 +138,7 @@ struct CommandSurfaceView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
-        .background(panelGlassTint.opacity(panelGlassTintOpacity * 0.9))
+        .background(panelGlassTint.opacity(panelGlassTintOpacity * 0.95))
     }
 
     private func statusBadge() -> some View {
@@ -183,7 +193,7 @@ struct CommandSurfaceView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
-            .background(panelGlassTint.opacity(panelGlassTintOpacity * 0.65))
+            .background(panelGlassTint.opacity(panelGlassTintOpacity * 0.75))
             .tint(PanelTokens.textSecondary)
             .accessibilityLabel("Context sources")
             .accessibilityHint("Expand to see page, documents, and what will be sent")
@@ -532,7 +542,7 @@ struct CommandSurfaceView: View {
             }
         }
         .padding(16)
-        .background(panelGlassTint.opacity(panelGlassTintOpacity * 0.65))
+        .background(panelGlassTint.opacity(panelGlassTintOpacity * 0.75))
     }
 
     private func sendIfEnter() {
