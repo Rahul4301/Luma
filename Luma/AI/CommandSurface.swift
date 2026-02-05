@@ -589,7 +589,7 @@ struct CommandSurfaceView: View {
             .font(.system(size: fontSize))
             .foregroundColor(isUser ? .white : assistantTextColor)
             .textSelection(.enabled)
-            .multilineTextAlignment(isUser ? .trailing : .leading)
+            .multilineTextAlignment(.leading)
             .lineSpacing(isUser ? 0 : 5)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
