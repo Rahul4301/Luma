@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "4D7AC0622F2C969300B7321B"
-               BuildableName = "Luma.app"
+               BuildableName = "Luna.app"
                BlueprintName = "Luma"
                ReferencedContainer = "container:Luma.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "4D7AC0622F2C969300B7321B"
-            BuildableName = "Luma.app"
+            BuildableName = "Luna.app"
             BlueprintName = "Luma"
             ReferencedContainer = "container:Luma.xcodeproj">
          </BuildableReference>
@@ -79,7 +79,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "4D7AC0622F2C969300B7321B"
-            BuildableName = "Luma.app"
+            BuildableName = "Luna.app"
             BlueprintName = "Luma"
             ReferencedContainer = "container:Luma.xcodeproj">
          </BuildableReference>
