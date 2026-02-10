@@ -647,7 +647,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let id = tabManager.newTab(url: requestURL)
         // IMPORTANT: the returned WKWebView must be created with the provided `configuration`,
         // otherwise WebKit throws: "Returned WKWebView was not created with the given configuration."
+        //
+        // CRITICAL FOR GOOGLE SIGN-IN: We must set the shared processPool and websiteDataStore
+        // on the provided configuration so cookies/sessions are shared across all tabs.
+        // Without this, Google OAuth popups create isolated sessions that don't persist.
+        configuration.processPool = WebViewWrapper.sharedProcessPool
+        configuration.websiteDataStore = .default()
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        configuration.preferences.javaScriptEnabled = true
         let wv = WKWebView(frame: .zero, configuration: configuration)
         if Self.shouldUseDefaultUserAgent(for: requestURL) {
             wv.customUserAgent = nil
