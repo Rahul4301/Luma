@@ -74,14 +74,19 @@ struct BrowserShellView: View {
     private var chromeTextMuted: Color { chromeTextIsLight ? Color.white.opacity(0.7) : Color(white: 0.15).opacity(0.7) }
 
     var body: some View {
-        ZStack {
+        // Compute tab strip visibility once
+        let currentURL = tabManager.currentTab.flatMap { tabManager.tabURL[$0] ?? nil }
+        let isStartPage = (currentURL == nil || currentURL?.absoluteString == "about:blank")
+        let shouldShowTabStrip = tabManager.tabCount() > 1 || !isStartPage
+        
+        return ZStack {
             Color(nsColor: .windowBackgroundColor)
                 .ignoresSafeArea()
 
             // Configures the window titlebar to be tall enough to hold tabs.
             // This is the key: it sets window.titlebarHeight so the traffic-light
-            // row is as tall as our tab strip.
-            TitlebarConfigurator(tabStripHeight: tabStripHeight)
+            // row is as tall as our tab strip (or default height when tabs hidden).
+            TitlebarConfigurator(tabStripHeight: shouldShowTabStrip ? tabStripHeight : 0)
 
             GeometryReader { geometry in
                 HStack(spacing: 0) {
@@ -89,22 +94,26 @@ struct BrowserShellView: View {
                     VStack(spacing: 0) {
 
                     // ─── Tab strip (toolbar stays dark; active tab uses chromeColor) ───
-                    TabStripView(
-                        tabManager: tabManager,
-                        faviconURLByTab: web.faviconURLByTab,
-                        contentAreaColor: chromeColor,
-                        chromeTextIsLight: chromeTextIsLight,
-                        onSwitch: { switchToTab($0) },
-                        onClose: { closeTab($0) },
-                        onNewTab: newTab,
-                        onDropURLForNewTab: { newTabWithURL($0) },
-                        onReorder: { tabManager.moveTab(from: $0, to: $1) }
-                    )
-                    .frame(height: tabStripHeight)
-                    .padding(.leading, 78)   // clear traffic lights
-                    .padding(.trailing, 8)
-                    .padding(.top, -(tabStripHeight - 6)) // pull up into titlebar
-                    .background(Color(white: 0.12))   // toolbar: dark strip (traffic lights + inactive area)
+                    // Hide tab strip on start page when there's only one tab
+                    if shouldShowTabStrip {
+                        TabStripView(
+                            tabManager: tabManager,
+                            faviconURLByTab: web.faviconURLByTab,
+                            contentAreaColor: chromeColor,
+                            chromeTextIsLight: chromeTextIsLight,
+                            onSwitch: { switchToTab($0) },
+                            onClose: { closeTab($0) },
+                            onNewTab: newTab,
+                            onDropURLForNewTab: { newTabWithURL($0) },
+                            onReorder: { tabManager.moveTab(from: $0, to: $1) }
+                        )
+                        .frame(height: tabStripHeight)
+                        .padding(.leading, 78)   // clear traffic lights
+                        .padding(.trailing, 8)
+                        .padding(.top, -(tabStripHeight - 6)) // pull up into titlebar
+                        .background(Color(white: 0.12))   // toolbar: dark strip (traffic lights + inactive area)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
 
                     // ─── Address bar row (hidden on start page; single centered bar is the search there) ───
                     if let cid = tabManager.currentTab,
@@ -322,6 +331,8 @@ struct BrowserShellView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
+                .animation(.easeInOut(duration: 0.2), value: shouldShowTabStrip)
+                .animation(.easeInOut(duration: 0.2), value: tabManager.tabCount())
                 .overlay(alignment: .topLeading) {
                     // Address bar suggestions: history (URL/title) first, then search; show when any suggestion exists
                     let hasSuggestions = !historySuggestions.isEmpty || !searchSuggestions.isEmpty
