@@ -69,6 +69,10 @@ struct CommandSurfaceView: View {
     @State private var documentPickerPresented: Bool = false
     @State private var documentError: String? = nil
     @State private var includeCurrentTab: Bool = true // Current tab is always included initially
+    @State private var includedOtherTabIds: [UUID] = []
+    @State private var otherTabContexts: [UUID: (title: String?, text: String?)] = [:]
+    @State private var addTabsSheetPresented: Bool = false
+    @State private var currentTabChipId: UUID = UUID()
 
     private var chatFontSize: CGFloat { CGFloat(aiPanelFontSizeRaw) }
 
@@ -98,6 +102,19 @@ struct CommandSurfaceView: View {
         }
         .onReceive(webViewWrapper.$currentURL.removeDuplicates()) { _ in
             loadPageContext()
+        }
+        .sheet(isPresented: $addTabsSheetPresented) {
+            AddTabContextSheet(
+                tabManager: webViewWrapper.tabManager,
+                currentTabId: tabId,
+                alreadyIncluded: Set(includedOtherTabIds),
+                onAdd: { id in
+                    if !includedOtherTabIds.contains(id) {
+                        includedOtherTabIds.append(id)
+                        loadTabContext(for: id)
+                    }
+                }
+            )
         }
         .fileImporter(
             isPresented: $documentPickerPresented,
@@ -152,6 +169,8 @@ struct CommandSurfaceView: View {
         messages = []
         attachedDocuments = []
         includeCurrentTab = true
+        includedOtherTabIds = []
+        otherTabContexts = [:]
         inputText = ""
         errorMessage = nil
         actionProposedMessage = nil
@@ -510,16 +529,27 @@ struct CommandSurfaceView: View {
     private func inputArea() -> some View {
         VStack(spacing: 0) {
             // Context tabs row: current tab + attached files as mini tabs
-            if includeCurrentTab || !attachedDocuments.isEmpty {
+            if includeCurrentTab || !includedOtherTabIds.isEmpty || !attachedDocuments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         // Current tab context tab
                         if includeCurrentTab {
                             contextTab(
-                                id: UUID(), // Use a stable ID for current tab
+                                id: currentTabChipId,
                                 label: thisPageLabel(),
                                 isCurrentTab: true,
                                 onRemove: { includeCurrentTab = false }
+                            )
+                        }
+
+                        // Other included tabs
+                        ForEach(includedOtherTabIds, id: \.self) { otherId in
+                            contextTab(
+                                id: otherId,
+                                label: otherTabLabel(tabId: otherId),
+                                isCurrentTab: false,
+                                onRemove: { removeIncludedOtherTab(id: otherId) },
+                                leadingSymbol: "square.stack.3d.up"
                             )
                         }
                         
@@ -541,8 +571,15 @@ struct CommandSurfaceView: View {
             
             // Input row: "+" button + text box with send button
             HStack(spacing: 10) {
-                // "+" button for adding files
-                Button(action: { documentPickerPresented = true }) {
+                // "+" button for adding context (tabs or files) - inline menu
+                Menu {
+                    Button(action: { addTabsSheetPresented = true }) {
+                        Label("Tabs", systemImage: "square.stack.3d.up")
+                    }
+                    Button(action: { documentPickerPresented = true }) {
+                        Label("Files", systemImage: "doc.fill")
+                    }
+                } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(PanelTokens.textSecondary)
@@ -550,8 +587,9 @@ struct CommandSurfaceView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Add file")
-                .accessibilityHint("Attach a document for additional context")
+                .menuStyle(.borderlessButton)
+                .accessibilityLabel("Add context")
+                .accessibilityHint("Choose tabs or files to add as context")
                 
                 // Text box with send button inside
                 let isGlowActive = isInputFocused || !inputText.isEmpty
@@ -603,8 +641,14 @@ struct CommandSurfaceView: View {
     }
     
     // Context tab component (mini tab showing file/tab name with hover trash icon)
-    private func contextTab(id: UUID, label: String, isCurrentTab: Bool, onRemove: @escaping () -> Void) -> some View {
-        ContextTabView(label: label, isCurrentTab: isCurrentTab, onRemove: onRemove)
+    private func contextTab(
+        id: UUID,
+        label: String,
+        isCurrentTab: Bool,
+        onRemove: @escaping () -> Void,
+        leadingSymbol: String? = nil
+    ) -> some View {
+        ContextTabView(label: label, isCurrentTab: isCurrentTab, leadingSymbol: leadingSymbol, onRemove: onRemove)
     }
 
     private func sendIfEnter() {
@@ -890,6 +934,29 @@ struct CommandSurfaceView: View {
             isLoadingContext = false
         }
     }
+    
+    /// Loads page context (title + visible text) for a specific tab.
+    private func loadTabContext(for tabId: UUID) {
+        let group = DispatchGroup()
+        var loadedTitle: String? = nil
+        var loadedText: String? = nil
+
+        group.enter()
+        webViewWrapper.evaluatePageTitle(for: tabId) { title in
+            loadedTitle = title
+            group.leave()
+        }
+
+        group.enter()
+        webViewWrapper.evaluateVisibleText(for: tabId, maxChars: 4000) { text in
+            loadedText = text
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            otherTabContexts[tabId] = (title: loadedTitle, text: loadedText)
+        }
+    }
 
     /// Builds context string from enabled context sources (current tab + attached files).
     private func buildContextString() -> String? {
@@ -908,12 +975,44 @@ struct CommandSurfaceView: View {
             }
         }
 
+        // Include other tabs (same format as current tab: URL + title + page content)
+        if let tm = webViewWrapper.tabManager {
+            for id in includedOtherTabIds {
+                if let url = tm.tabURL[id] ?? nil {
+                    var tabParts: [String] = []
+                    tabParts.append("URL: \(url.absoluteString)")
+                    let context = otherTabContexts[id]
+                    if let title = context?.title, !title.isEmpty {
+                        tabParts.append("Title: \(title)")
+                    } else if let t = tm.tabTitle[id], !t.isEmpty {
+                        tabParts.append("Title: \(t)")
+                    }
+                    if let text = context?.text, !text.isEmpty {
+                        tabParts.append("Page content:\n\(text)")
+                    }
+                    parts.append(tabParts.joined(separator: "\n"))
+                }
+            }
+        }
+
         // Include attached documents
         for doc in attachedDocuments {
             parts.append("Document \"\(doc.displayName)\":\n\(doc.textForContext)")
         }
 
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    private func otherTabLabel(tabId: UUID) -> String {
+        guard let tm = webViewWrapper.tabManager else { return "Tab" }
+        if let title = tm.tabTitle[tabId], !title.isEmpty { return title }
+        if let url = tm.tabURL[tabId] ?? nil, let host = url.host { return host }
+        return "Tab"
+    }
+
+    private func removeIncludedOtherTab(id: UUID) {
+        includedOtherTabIds.removeAll { $0 == id }
+        otherTabContexts.removeValue(forKey: id)
     }
 
     private func sendCommand() {
@@ -1250,20 +1349,15 @@ private struct AttachedDocument: Identifiable {
 private struct ContextTabView: View {
     let label: String
     let isCurrentTab: Bool
+    let leadingSymbol: String?
     let onRemove: () -> Void
     @State private var isHovered: Bool = false
     
     var body: some View {
         HStack(spacing: 6) {
-            if isCurrentTab {
-                Image(systemName: "globe")
-                    .font(.system(size: 10))
-                    .foregroundColor(Color.white.opacity(0.6))
-            } else {
-                Image(systemName: "doc.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(Color.white.opacity(0.6))
-            }
+            Image(systemName: resolvedLeadingSymbol)
+                .font(.system(size: 10))
+                .foregroundColor(Color.white.opacity(0.6))
             
             Text(label)
                 .font(.system(size: 11))
@@ -1296,6 +1390,139 @@ private struct ContextTabView: View {
         }
         .accessibilityLabel(isCurrentTab ? "Current tab: \(label)" : "File: \(label)")
         .accessibilityHint("Hover to remove from context")
+    }
+
+    private var resolvedLeadingSymbol: String {
+        if let s = leadingSymbol { return s }
+        if isCurrentTab { return "globe" }
+        return "doc.fill"
+    }
+}
+
+// MARK: - Add tab context sheet
+
+private struct AddTabContextSheet: View {
+    let tabManager: TabManager?
+    let currentTabId: UUID?
+    let alreadyIncluded: Set<UUID>
+    let onAdd: (UUID) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var orderedTabs: [UUID] {
+        guard let tm = tabManager else { return [] }
+        return tm.tabOrder
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider().opacity(0.2)
+            content
+        }
+        .frame(minWidth: 420, minHeight: 360)
+        .background(
+            ZStack {
+                VisualEffectView(material: .hudWindow, blendingMode: .behindWindow, state: .active)
+                panelGlassTint.opacity(panelGlassTintOpacity)
+            }
+        )
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Add tab context")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(Color.white.opacity(0.9))
+            Spacer()
+            Button("Done") { dismiss() }
+                .buttonStyle(.plain)
+                .foregroundColor(Color.white.opacity(0.75))
+        }
+        .padding(16)
+    }
+
+    private var content: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                if orderedTabs.isEmpty {
+                    Text("No tabs found.")
+                        .foregroundColor(Color.white.opacity(0.55))
+                        .padding(.top, 24)
+                } else {
+                    ForEach(orderedTabs, id: \.self) { id in
+                        tabRow(id: id)
+                    }
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    @ViewBuilder
+    private func tabRow(id: UUID) -> some View {
+        let isCurrent = (currentTabId == id)
+        let isIncluded = alreadyIncluded.contains(id)
+        Button(action: {
+            guard !isCurrent, !isIncluded else { return }
+            onAdd(id)
+        }) {
+            HStack(spacing: 10) {
+                Image(systemName: isCurrent ? "globe" : "square.stack.3d.up")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color.white.opacity(isCurrent ? 0.45 : 0.7))
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tabTitle(id: id))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Color.white.opacity(0.9))
+                        .lineLimit(1)
+                    if let subtitle = tabSubtitle(id: id) {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundColor(Color.white.opacity(0.5))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if isCurrent {
+                    Text("Current")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color.white.opacity(0.45))
+                } else if isIncluded {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color.white.opacity(0.55))
+                } else {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color.white.opacity(0.75))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isCurrent || isIncluded)
+        .opacity(isCurrent ? 0.7 : 1.0)
+    }
+
+    private func tabTitle(id: UUID) -> String {
+        guard let tm = tabManager else { return "Tab" }
+        if let title = tm.tabTitle[id], !title.isEmpty { return title }
+        if let url = tm.tabURL[id] ?? nil { return url.host ?? url.absoluteString }
+        return "Tab"
+    }
+
+    private func tabSubtitle(id: UUID) -> String? {
+        guard let tm = tabManager else { return nil }
+        guard let url = tm.tabURL[id] ?? nil else { return nil }
+        let s = url.absoluteString
+        return s.isEmpty ? nil : s
     }
 }
 

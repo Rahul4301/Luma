@@ -438,6 +438,15 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             DispatchQueue.main.async { completion(nil) }
             return
         }
+        evaluateVisibleText(for: tabId, maxChars: maxChars, completion: completion)
+    }
+    
+    /// Extracts visible text from a specific tab, bounded to maxChars (default 4000, hard max 12000 per AGENTS.md).
+    func evaluateVisibleText(for tabId: UUID, maxChars: Int = 4000, completion: @escaping (String?) -> Void) {
+        guard let wv = webViews[tabId] else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
         let limit = min(maxChars, 12000)
         let js = "document.body.innerText.substring(0, \(limit))"
         wv.evaluateJavaScript(js) { result, error in
@@ -448,6 +457,27 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 }
                 if let text = result as? String, !text.isEmpty {
                     completion(text)
+                } else {
+                    completion(nil)
+                }
+            }
+        }
+    }
+    
+    /// Evaluates page title for a specific tab.
+    func evaluatePageTitle(for tabId: UUID, completion: @escaping (String?) -> Void) {
+        guard let wv = webViews[tabId] else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        wv.evaluateJavaScript("document.title") { result, error in
+            DispatchQueue.main.async {
+                if error != nil {
+                    completion(nil)
+                    return
+                }
+                if let title = result as? String, !title.isEmpty {
+                    completion(title)
                 } else {
                     completion(nil)
                 }
