@@ -48,6 +48,7 @@ struct BrowserShellView: View {
 
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
+    private let ollama = OllamaClient()
 
     // Layout constants
     private let tabStripHeight: CGFloat = 38
@@ -179,6 +180,9 @@ struct BrowserShellView: View {
                                             addressBarKeyState.visible = false
                                         }
                                     }
+                                    .onTapGesture {
+                                        selectAllAddressBarText()
+                                    }
 
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 12, weight: .medium))
@@ -195,7 +199,7 @@ struct BrowserShellView: View {
                                 RoundedRectangle(cornerRadius: 10)
                                     .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
                             )
-                            .animation(.easeInOut(duration: 0.15), value: addressBarFocused)
+                            .animation(.easeInOut(duration: 0.06), value: addressBarFocused)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
                                 handleURLDrop(providers: providers) { url in
                                     addressBarText = url.absoluteString
@@ -330,9 +334,9 @@ struct BrowserShellView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .animation(.easeInOut(duration: 0.1), value: tabManager.currentTab)
-                .animation(.easeInOut(duration: 0.2), value: shouldShowTabStrip)
-                .animation(.easeInOut(duration: 0.2), value: tabManager.tabCount())
+                .animation(.easeInOut(duration: 0.08), value: tabManager.currentTab)
+                .animation(.easeInOut(duration: 0.06), value: shouldShowTabStrip)
+                .animation(.easeInOut(duration: 0.06), value: tabManager.tabCount())
                 .overlay(alignment: .topLeading) {
                     // Address bar suggestions: history (URL/title) first, then search; show when any suggestion exists
                     let hasSuggestions = !historySuggestions.isEmpty || !searchSuggestions.isEmpty
@@ -394,6 +398,7 @@ struct BrowserShellView: View {
                                 webViewWrapper: web,
                                 commandRouter: router,
                                 gemini: gemini,
+                                ollama: ollama,
                                 tabId: currentId
                             ) { response in
                                 pendingAssistantText = response.text
@@ -611,6 +616,16 @@ struct BrowserShellView: View {
             }
         } else {
             addressBarText = ""
+        }
+    }
+
+    /// Selects the entire address bar contents when the user clicks/taps into it.
+    /// Uses the current first responder (NSTextView) in the key window.
+    private func selectAllAddressBarText() {
+        DispatchQueue.main.async {
+            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                editor.selectAll(nil)
+            }
         }
     }
 
@@ -1360,8 +1375,8 @@ private struct TabStripView: View {
                     .allowsHitTesting(true)
             }
             .frame(maxWidth: .infinity)
-            .animation(.easeInOut(duration: 0.2), value: tabManager.tabCount())
-            .animation(.easeInOut(duration: 0.2), value: geometry.size.width)
+            .animation(.easeInOut(duration: 0.06), value: tabManager.tabCount())
+            .animation(.easeInOut(duration: 0.06), value: geometry.size.width)
         }
         .frame(maxWidth: .infinity)
         .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
@@ -1477,8 +1492,8 @@ private struct TabPill: View {
                     ? contentAreaColor
                     : Color(white: 0.22).opacity(isHovered ? 0.9 : 0.6))
         )
-        .animation(.easeInOut(duration: 0.15), value: isHovered)
-        .animation(.easeInOut(duration: 0.15), value: isActive)
+        .animation(.easeInOut(duration: 0.06), value: isHovered)
+        .animation(.easeInOut(duration: 0.06), value: isActive)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Tab \(index): \(displayTitle)")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)

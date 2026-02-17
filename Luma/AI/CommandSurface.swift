@@ -41,11 +41,15 @@ struct CommandSurfaceView: View {
     let webViewWrapper: WebViewWrapper
     let commandRouter: CommandRouter
     let gemini: GeminiClient
+    let ollama: OllamaClient
     let onActionProposed: (LLMResponse) -> Void
     
     var tabId: UUID? = nil
 
     @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSizeRaw: Int = 13
+    @AppStorage("luma_ai_provider") private var aiProviderRaw: String = AIProvider.gemini.rawValue
+    @AppStorage("luma_ollama_base_url") private var ollamaBaseURL: String = "http://127.0.0.1:11434"
+    @AppStorage("luma_ollama_model") private var ollamaModel: String = ""
     @State private var inputText: String = ""
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
@@ -60,13 +64,16 @@ struct CommandSurfaceView: View {
     @State private var pageTitle: String? = nil
     @State private var pageText: String? = nil
     @State private var isLoadingContext: Bool = false
-    @State private var contextRefreshTimer: Timer? = nil
 
     @State private var attachedDocuments: [AttachedDocument] = []
     @State private var documentPickerPresented: Bool = false
     @State private var documentError: String? = nil
 
     private var chatFontSize: CGFloat { CGFloat(aiPanelFontSizeRaw) }
+
+    private var aiProvider: AIProvider {
+        AIProvider(rawValue: aiProviderRaw) ?? .gemini
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,9 +105,10 @@ struct CommandSurfaceView: View {
         )
         .onAppear {
             loadPageContext()
-            startContextRefreshTimer()
         }
-        .onDisappear { stopContextRefreshTimer() }
+        .onReceive(webViewWrapper.$currentURL.removeDuplicates()) { _ in
+            loadPageContext()
+        }
     }
 
     // MARK: - Header
@@ -156,13 +164,24 @@ struct CommandSurfaceView: View {
     }
 
     private func statusDotState() -> (Color, String) {
-        if GeminiClient.lastNetworkError != nil {
-            return (.red, "Error")
+        switch aiProvider {
+        case .gemini:
+            if GeminiClient.lastNetworkError != nil {
+                return (.red, "Error")
+            }
+            if KeychainManager.shared.fetchGeminiKey() == nil {
+                return (.gray, "No API key")
+            }
+            return (.green, "Ready")
+        case .ollama:
+            if OllamaClient.lastNetworkError != nil {
+                return (.red, "Error")
+            }
+            if ollamaModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (.gray, "No local model")
+            }
+            return (.green, "Ready")
         }
-        if KeychainManager.shared.fetchGeminiKey() == nil {
-            return (.gray, "No API key")
-        }
-        return (.green, "Ready")
     }
 
     // MARK: - Context sources (this page + documents + other tabs teaser)
@@ -800,27 +819,12 @@ struct CommandSurfaceView: View {
     }
 
     private func close() {
-        stopContextRefreshTimer()
         isPresented = false
         inputText = ""
         errorMessage = nil
         isSending = false
         actionProposedMessage = nil
         attachedDocuments = []
-    }
-
-    /// Starts a timer to refresh context every 3 seconds.
-    private func startContextRefreshTimer() {
-        stopContextRefreshTimer()
-        contextRefreshTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-            loadPageContext()
-        }
-    }
-
-    /// Stops the context refresh timer.
-    private func stopContextRefreshTimer() {
-        contextRefreshTimer?.invalidate()
-        contextRefreshTimer = nil
     }
 
     /// Loads page context (title + visible text) when panel appears.
@@ -900,12 +904,7 @@ struct CommandSurfaceView: View {
         // Only send last 4-6 messages for immediate context to save tokens
         let recentContext = messages.dropLast().suffix(6)
 
-        gemini.generate(
-            prompt: promptToSend,
-            context: contextToSend,
-            recentMessages: Array(recentContext),
-            conversationSummary: conversationSummary
-        ) { result in
+        let completionHandler: (Result<Data, Error>) -> Void = { result in
             DispatchQueue.main.async {
                 isSending = false
 
@@ -939,6 +938,27 @@ struct CommandSurfaceView: View {
                     actionProposedMessage = nil
                 }
             }
+        }
+
+        switch aiProvider {
+        case .gemini:
+            gemini.generate(
+                prompt: promptToSend,
+                context: contextToSend,
+                recentMessages: Array(recentContext),
+                conversationSummary: conversationSummary,
+                completion: completionHandler
+            )
+        case .ollama:
+            ollama.generate(
+                baseURLString: ollamaBaseURL,
+                model: ollamaModel,
+                prompt: promptToSend,
+                context: contextToSend,
+                recentMessages: Array(recentContext),
+                conversationSummary: conversationSummary,
+                completion: completionHandler
+            )
         }
     }
     

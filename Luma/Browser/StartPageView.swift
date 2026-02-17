@@ -53,7 +53,7 @@ struct StartPageView: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(searchFocused ? Color.white.opacity(0.25) : Color.clear, lineWidth: 1.5)
         )
-        .animation(.easeInOut(duration: 0.15), value: searchFocused)
+        .animation(.easeInOut(duration: 0.06), value: searchFocused)
     }
 
     var body: some View {

@@ -3,123 +3,262 @@ import Foundation
 import SwiftUI
 import AppKit
 
-/// Settings view for API key management.
-///
-/// Per SRS F5: Settings UI for Gemini API key input (BYO).
-/// No sign-in or account required—API key is stored locally in Keychain.
-/// Per SECURITY.md: Keys handled via KeychainManager only; UI never stores tokens directly.
 struct SettingsView: View {
+    var body: some View {
+        TabView {
+            GeneralSettingsView()
+                .tabItem { Text("General") }
+            ModelsSettingsView()
+                .tabItem { Text("AI & Models") }
+        }
+        .frame(width: 520, height: 520)
+    }
+}
+
+/// General appearance/text settings.
+private struct GeneralSettingsView: View {
     @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSizeRaw: Int = 13
     @AppStorage("luma_appearance") private var appearance: String = "system"
-    @State private var keyInput: String = ""
-    @State private var statusText: String = ""
-    @State private var hasKey: Bool = false
-    @State private var isProcessing: Bool = false
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Settings")
-                .font(.largeTitle)
-                .padding(.bottom)
-            
-            // AI Panel Text Size (6–32 pt slider)
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("AI Panel Text Size")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("General")
+                    .font(.largeTitle)
+                    .padding(.bottom)
+
+                // AI Panel Text Size (6–32 pt slider)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("AI Panel Text Size")
+                            .font(.headline)
+                        Spacer()
+                        Text("\(aiPanelFontSizeRaw) pt")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Slider(value: Binding(
+                        get: { Double(aiPanelFontSizeRaw) },
+                        set: { aiPanelFontSizeRaw = Int($0.rounded()) }
+                    ), in: 6...32, step: 1)
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+
+                // Appearance (Light / Dark / System)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Appearance")
                         .font(.headline)
-                    Spacer()
-                    Text("\(aiPanelFontSizeRaw) pt")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Slider(value: Binding(
-                    get: { Double(aiPanelFontSizeRaw) },
-                    set: { aiPanelFontSizeRaw = Int($0.rounded()) }
-                ), in: 6...32, step: 1)
-            }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            
-            // Appearance (Light / Dark / System)
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Appearance")
-                    .font(.headline)
-                Picker("", selection: $appearance) {
-                    Text("Light").tag("light")
-                    Text("Dark").tag("dark")
-                    Text("System").tag("system")
-                }
-                .pickerStyle(.segmented)
-            }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            
-            // Gemini API Key Section
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Gemini API Key (BYO)")
-                    .font(.headline)
-                
-                Text("No account required. Enter your Gemini API key—it will be stored securely in Keychain.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                SecureField("Enter API key", text: $keyInput)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(isProcessing)
-                
-                // Read-only key status row
-                Text("AI Status: " + (hasKey ? "Key stored" : "No API key"))
-                    .font(.caption)
-                    .foregroundColor(hasKey ? .green : .secondary)
-                
-                // Detailed status text
-                if !statusText.isEmpty {
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                HStack(spacing: 12) {
-                    Button("Save Key") {
-                        saveKey()
+                    Picker("", selection: $appearance) {
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                        Text("System").tag("system")
                     }
-                    .disabled(isProcessing)
-                    
-                    Button("Delete Key") {
-                        deleteKey()
-                    }
-                    .disabled(isProcessing || !hasKey)
+                    .pickerStyle(.segmented)
                 }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+
+                Spacer()
             }
             .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            
-            Spacer()
         }
-        .padding()
-        .frame(width: 500, height: 480)
-        .onAppear(perform: loadKeyStatus)
     }
-    
+}
+
+/// Settings for AI provider, Gemini key, and local/Ollama models.
+private struct ModelsSettingsView: View {
+    @AppStorage("luma_ai_provider") private var aiProviderRaw: String = AIProvider.gemini.rawValue
+
+    // Gemini
+    @State private var keyInput: String = ""
+    @State private var hasKey: Bool = false
+    @State private var statusText: String = ""
+    @State private var isProcessingKey: Bool = false
+
+    // Ollama / local
+    @AppStorage("luma_ollama_base_url") private var ollamaBaseURL: String = "http://127.0.0.1:11434"
+    @AppStorage("luma_ollama_model") private var ollamaModel: String = ""
+    @State private var availableModels: [String] = []
+    @State private var modelsStatus: String = ""
+    @State private var isRefreshingModels: Bool = false
+
+    private let ollamaClient = OllamaClient()
+
+    private var aiProvider: AIProvider {
+        AIProvider(rawValue: aiProviderRaw) ?? .gemini
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("AI & Models")
+                    .font(.largeTitle)
+                    .padding(.bottom)
+
+                // Provider selection
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("AI Provider")
+                        .font(.headline)
+                    Picker("AI Provider", selection: $aiProviderRaw) {
+                        ForEach(AIProvider.allCases) { provider in
+                            Text(provider.displayName).tag(provider.rawValue)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+
+                // Gemini section
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Gemini API Key (BYO)")
+                            .font(.headline)
+                        Spacer()
+                        if aiProvider == .gemini {
+                            Text("Active")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        } else {
+                            Text("Inactive")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Text("Enter your Gemini API key. It is stored securely in Keychain and never logged.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    SecureField("Enter API key", text: $keyInput)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(isProcessingKey)
+
+                    Text("AI Status: " + (hasKey ? "Key stored" : "No API key"))
+                        .font(.caption)
+                        .foregroundColor(hasKey ? .green : .secondary)
+
+                    if !statusText.isEmpty {
+                        Text(statusText)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("Save Key") {
+                            saveKey()
+                        }
+                        .disabled(isProcessingKey || keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button("Delete Key") {
+                            deleteKey()
+                        }
+                        .disabled(isProcessingKey || !hasKey)
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+
+                // Local / Ollama section
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Local / Ollama")
+                            .font(.headline)
+                        Spacer()
+                        if aiProvider == .ollama {
+                            Text("Active")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        } else {
+                            Text("Inactive")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Text("Run models locally via Ollama instead of sending prompts to a cloud API.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Ollama Base URL")
+                            .font(.subheadline)
+                        TextField("http://127.0.0.1:11434", text: $ollamaBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .disableAutocorrection(true)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Model")
+                                .font(.subheadline)
+                            Spacer()
+                            Button(action: refreshModels) {
+                                if isRefreshingModels {
+                                    ProgressView().scaleEffect(0.7)
+                                } else {
+                                    Text("Refresh models")
+                                }
+                            }
+                            .disabled(isRefreshingModels)
+                        }
+
+                        if !availableModels.isEmpty {
+                            Picker("Model", selection: $ollamaModel) {
+                                ForEach(availableModels, id: \.self) { model in
+                                    Text(model).tag(model)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        } else {
+                            Text("No models loaded yet. Click “Refresh models” to query Ollama.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if !modelsStatus.isEmpty {
+                        Text(modelsStatus)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+
+                Spacer()
+            }
+            .padding()
+        }
+        .onAppear {
+            loadKeyStatus()
+        }
+    }
+
+    // MARK: - Gemini helpers
+
     private func loadKeyStatus() {
         let existingKey = KeychainManager.shared.fetchGeminiKey()
         hasKey = (existingKey != nil)
         statusText = hasKey ? "Key stored in Keychain. AI Status: Ready." : "No Gemini key saved."
     }
-    
+
     private func saveKey() {
         let trimmed = keyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             statusText = "Key cannot be empty"
             return
         }
-        
-        isProcessing = true
+
+        isProcessingKey = true
         statusText = ""
-        
+
         do {
             try KeychainManager.shared.storeGeminiKey(trimmed)
             hasKey = true
@@ -129,14 +268,14 @@ struct SettingsView: View {
         } catch {
             statusText = "Error saving key: \(error.localizedDescription)"
         }
-        
-        isProcessing = false
+
+        isProcessingKey = false
     }
-    
+
     private func deleteKey() {
-        isProcessing = true
+        isProcessingKey = true
         statusText = ""
-        
+
         do {
             try KeychainManager.shared.deleteGeminiKey()
             hasKey = false
@@ -145,7 +284,32 @@ struct SettingsView: View {
         } catch {
             statusText = "Error deleting key: \(error.localizedDescription)"
         }
-        
-        isProcessing = false
+
+        isProcessingKey = false
+    }
+
+    // MARK: - Ollama helpers
+
+    private func refreshModels() {
+        isRefreshingModels = true
+        modelsStatus = "Contacting Ollama…"
+        ollamaClient.listModels(baseURLString: ollamaBaseURL) { result in
+            isRefreshingModels = false
+            switch result {
+            case .success(let models):
+                availableModels = models.sorted()
+                if availableModels.isEmpty {
+                    modelsStatus = "No models reported by Ollama. Make sure at least one model is pulled."
+                } else {
+                    modelsStatus = "Loaded \(availableModels.count) models from Ollama."
+                    if ollamaModel.isEmpty, let first = availableModels.first {
+                        ollamaModel = first
+                    }
+                }
+            case .failure(let error):
+                modelsStatus = error.localizedDescription
+            }
+        }
     }
 }
+

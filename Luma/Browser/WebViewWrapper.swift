@@ -654,7 +654,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         configuration.processPool = WebViewWrapper.sharedProcessPool
         configuration.websiteDataStore = .default()
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // Ensure JavaScript/content scripts are enabled for popup windows as well (Google/Gmail sign-in flows).
         configuration.preferences.javaScriptEnabled = true
+        if #available(macOS 11.0, *) {
+            configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        }
         let wv = WKWebView(frame: .zero, configuration: configuration)
         if Self.shouldUseDefaultUserAgent(for: requestURL) {
             wv.customUserAgent = nil
