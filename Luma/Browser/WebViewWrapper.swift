@@ -65,24 +65,74 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return h
     }()
 
-    /// Script runs at documentEnd so theme color is available as soon as the page renders (O(1) relative to load).
-    /// On Google domains we skip so we don't inject any custom behavior (avoids "request is suspicious" for API key flow).
+    /// At documentStart: read theme-color meta only (instant, no layout). Many sites set it in <head>.
+    private static let themeEarlyScriptSource = """
+        (function(){
+            if (!window.webkit || !window.webkit.messageHandlers.lumaPageTheme) return;
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (!meta || !meta.content) return;
+            var c = (meta.content || '').trim();
+            if (c.indexOf('#') === 0 && c.length >= 7) { var r=parseInt(c.slice(1,3),16),g=parseInt(c.slice(3,5),16),b=parseInt(c.slice(5,7),16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); return; }
+            if (c.length === 4 && c[0]==='#') { var r=parseInt(c[1]+c[1],16),g=parseInt(c[2]+c[2],16),b=parseInt(c[3]+c[3],16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); }
+        })();
+        """
+
+    /// Dia-style theme extraction at documentEnd: theme-color meta → CSS variables → body/root → header/main/first visible.
+    /// Runs on all sites (including Gmail) so tab and address bar match site theme. MutationObserver + delayed samples for live updates.
     private static let themeScriptSource = """
         (function(){
-            var host = (window.location && window.location.hostname) ? window.location.hostname : '';
-            if (host.endsWith('google.com') || host.endsWith('googleapis.com') || host.endsWith('googleusercontent.com') || host.endsWith('gstatic.com')) return;
-            var el = document.body || document.documentElement;
-            if (!el) return;
-            var bg = window.getComputedStyle(el).backgroundColor;
-            if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') { el = document.documentElement; bg = el ? window.getComputedStyle(el).backgroundColor : null; }
-            if (!bg || bg === 'transparent') { window.webkit.messageHandlers.lumaPageTheme.postMessage(''); return; }
-            var m = bg.match(/rgb\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)/);
-            if (m) { window.webkit.messageHandlers.lumaPageTheme.postMessage(m[1]+','+m[2]+','+m[3]); return; }
-            var m2 = bg.match(/rgba\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/);
-            if (m2) { window.webkit.messageHandlers.lumaPageTheme.postMessage(m2[1]+','+m2[2]+','+m2[3]); return; }
-            if (bg.indexOf('#') === 0 && bg.length >= 7) { var r=parseInt(bg.slice(1,3),16),g=parseInt(bg.slice(3,5),16),b=parseInt(bg.slice(5,7),16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); return; }
-            if (bg.length === 4) { var r=parseInt(bg[1]+bg[1],16),g=parseInt(bg[2]+bg[2],16),b=parseInt(bg[3]+bg[3],16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); return; }
-            window.webkit.messageHandlers.lumaPageTheme.postMessage('');
+            if (!window.webkit || !window.webkit.messageHandlers.lumaPageTheme) return;
+            function parseColor(c) {
+                if (!c || typeof c !== 'string') return null;
+                c = c.trim();
+                var m = c.match(/rgb\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/);
+                if (m) return m[1]+','+m[2]+','+m[3];
+                if (c.indexOf('#') === 0 && c.length >= 7) { var r=parseInt(c.slice(1,3),16),g=parseInt(c.slice(3,5),16),b=parseInt(c.slice(5,7),16); return r+','+g+','+b; }
+                if (c.length === 4 && c[0]==='#') { var r=parseInt(c[1]+c[1],16),g=parseInt(c[2]+c[2],16),b=parseInt(c[3]+c[3],16); return r+','+g+','+b; }
+                return null;
+            }
+            function send(rgb) { if (rgb) window.webkit.messageHandlers.lumaPageTheme.postMessage(rgb); else window.webkit.messageHandlers.lumaPageTheme.postMessage(''); }
+            function bgFrom(el) {
+                if (!el) return null;
+                var bg = window.getComputedStyle(el).backgroundColor;
+                if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') return null;
+                return parseColor(bg);
+            }
+            function sampleTheme() {
+                var rgb = null;
+                var meta = document.querySelector('meta[name="theme-color"]');
+                if (meta && meta.content) rgb = parseColor(meta.content.trim());
+                if (!rgb) {
+                    var root = document.documentElement;
+                    var style = root && window.getComputedStyle(root);
+                    if (style) {
+                        var v = style.getPropertyValue('--theme-color') || style.getPropertyValue('--primary') || style.getPropertyValue('--background') || style.getPropertyValue('--bg') || style.getPropertyValue('--color-primary');
+                        if (v) rgb = parseColor(v.trim());
+                    }
+                }
+                if (!rgb) rgb = bgFrom(document.body) || bgFrom(document.documentElement);
+                if (!rgb && document.body) {
+                    var candidates = document.querySelectorAll('header, [role="banner"], main, [role="main"], section, .hero, [class*="hero"], [class*="banner"], #header, .header, div');
+                    for (var i = 0; i < Math.min(candidates.length, 12); i++) {
+                        rgb = bgFrom(candidates[i]);
+                        if (rgb) break;
+                    }
+                }
+                send(rgb);
+            }
+            sampleTheme();
+            var debounceTimer = null;
+            function scheduleSample() {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(function() { sampleTheme(); debounceTimer = null; }, 100);
+            }
+            try {
+                var mo = new MutationObserver(scheduleSample);
+                mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'content'], subtree: true });
+                if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'], subtree: true });
+            } catch(e) {}
+            setTimeout(sampleTheme, 300);
+            setTimeout(sampleTheme, 900);
         })();
         """
 
@@ -144,6 +194,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
         config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
         config.userContentController.add(googleSuspiciousErrorHandler, name: "lumaGoogleSuspiciousError")
+        let themeEarlyScript = WKUserScript(source: WebViewWrapper.themeEarlyScriptSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        config.userContentController.addUserScript(themeEarlyScript)
         let themeScript = WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(themeScript)
         let googleErrorScript = WKUserScript(source: WebViewWrapper.googleSuspiciousErrorScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)

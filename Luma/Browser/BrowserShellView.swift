@@ -257,6 +257,7 @@ struct BrowserShellView: View {
                         .frame(height: addressBarHeight)
                         .frame(maxWidth: .infinity)
                         .background(chromeColor)
+                        .animation(.easeInOut(duration: 0.06), value: chromeColor)
                     }
 
                     // ─── Web content or start page ───────────────────────────
@@ -308,6 +309,11 @@ struct BrowserShellView: View {
                                     ProgressView()
                                         .scaleEffect(0.8)
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        .onAppear {
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                                isFirstLoad = false
+                                            }
+                                        }
                                 }
                                 if web.googleSuspiciousErrorDetected, currentURL?.host?.contains("aistudio.google.com") == true {
                                     GoogleSuspiciousErrorBanner(
@@ -639,7 +645,9 @@ struct BrowserShellView: View {
         let task = DispatchWorkItem {
             guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
                   let url = URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") else { return }
-            URLSession.shared.dataTask(with: url) { data, _, _ in
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5
+            URLSession.shared.dataTask(with: request) { data, _, _ in
                 guard let data = data,
                       var raw = String(data: data, encoding: .utf8) else {
                     DispatchQueue.main.async { searchSuggestions = [] }
@@ -666,7 +674,7 @@ struct BrowserShellView: View {
             }.resume()
         }
         suggestionDebounceTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: task)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: task)
     }
 
     private func resolveToURL(_ input: String) -> URL? {
@@ -1492,6 +1500,7 @@ private struct TabPill: View {
                     ? contentAreaColor
                     : Color(white: 0.22).opacity(isHovered ? 0.9 : 0.6))
         )
+        .animation(.easeInOut(duration: 0.06), value: contentAreaColor)
         .animation(.easeInOut(duration: 0.06), value: isHovered)
         .animation(.easeInOut(duration: 0.06), value: isActive)
         .accessibilityElement(children: .combine)
