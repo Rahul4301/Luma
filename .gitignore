@@ -21,3 +21,6 @@ package-lock.json
 # Secrets
 .env
 
+# Local code signing (do not commit — use Signing.xcconfig.example to create your own)
+Signing.xcconfig
+

@@ -1,0 +1,5 @@
+// Copy this file to Signing.xcconfig and set your Apple Team ID.
+// Signing.xcconfig is gitignored so it will not show up in PRs.
+// Get your Team ID: https://developer.apple.com/account#MembershipDetailsCard
+
+DEVELOPMENT_TEAM =
