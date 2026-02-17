@@ -415,10 +415,13 @@ struct BrowserShellView: View {
                             .clipShape(RoundedRectangle(cornerRadius: chromeCornerRadius))
                             .padding(.trailing, chromePadding)
                             .padding(.vertical, chromePadding)
-                            .animation(isDraggingDivider ? nil : .easeOut(duration: 0.15), value: aiPanelWidth)
                         }
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
-                        .animation(isDraggingDivider ? nil : .easeInOut(duration: 0.1), value: tabsWithPanelOpen.contains(currentId))
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .trailing).combined(with: .opacity),
+                            removal: .move(edge: .trailing).combined(with: .opacity)
+                        ))
+                        .animation(isDraggingDivider ? nil : .spring(response: 0.35, dampingFraction: 0.85), value: tabsWithPanelOpen.contains(currentId))
+                        .animation(isDraggingDivider ? nil : .spring(response: 0.3, dampingFraction: 0.9), value: aiPanelWidth)
                         .onAppear {
                             if shouldResetPanelWidth {
                                 // Set to 1/3 of total width
