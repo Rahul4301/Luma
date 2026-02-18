@@ -1,6 +1,6 @@
-# Luma Browser
+# Luna Browser
 
-A fast, AI-powered browser built natively for macOS. Luma combines a SwiftUI-based browsing experience with integrated AI chat, privacy-first design, and a clean interface that feels at home on your Mac.
+A fast, AI-powered browser built natively for macOS. Luna combines a SwiftUI-based browsing experience with integrated AI chat, privacy-first design, and a clean interface that feels at home on your Mac.
 
 ![macOS](https://img.shields.io/badge/macOS-15.0%2B-blue)
 ![Xcode](https://img.shields.io/badge/Xcode-26.x-blue)
@@ -8,7 +8,7 @@ A fast, AI-powered browser built natively for macOS. Luma combines a SwiftUI-bas
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 > **Warning**
-> Luma is in early development and **not yet ready for day-to-day use**.
+> Luna is in early development and **not yet ready for day-to-day use**.
 
 ---
 
@@ -42,7 +42,7 @@ A fast, AI-powered browser built natively for macOS. Luma combines a SwiftUI-bas
 
 ## Recommended AI Provider
 
-Luma supports multiple AI backends. For the best experience, we recommend using **[gpt-oss 120B](https://ollama.com/library/gpt-oss:120b)** via Ollama as your AI provider.
+Luna supports multiple AI backends. For the best experience, we recommend using **[gpt-oss 120B](https://ollama.com/library/gpt-oss:120b)** via Ollama as your AI provider.
 
 gpt-oss 120B is OpenAI's open-weight model designed for powerful reasoning, agentic tasks, and versatile developer use cases. It ships with full chain-of-thought, native function calling, and runs under a permissive Apache 2.0 license.
 
@@ -53,9 +53,9 @@ gpt-oss 120B is OpenAI's open-weight model designed for powerful reasoning, agen
    ```bash
    ollama run gpt-oss:120b
    ```
-3. In Luma, open **Settings > AI & Models**, select **Ollama** as your provider, and choose `gpt-oss:120b` from the model list.
+3. In Luna, open **Settings > AI & Models**, select **Ollama** as your provider, and choose `gpt-oss:120b` from the model list.
 
-Luma also supports **Google Gemini** (cloud) and any other model available through your local Ollama instance.
+Luna also supports **Google Gemini** (cloud) and any other model available through your local Ollama instance.
 
 ---
 
