@@ -27,6 +27,7 @@ struct BrowserShellView: View {
     @State private var addressBarText: String = ""
     @State private var tabsWithPanelOpen: Set<UUID> = []
     @State private var tabChatHistory: [UUID: [ChatMessage]] = [:]
+    @State private var tabAIChatMessages: [UUID: [ChatMessage]] = [:]
     @State private var aiPanelWidth: CGFloat = 380
     @State private var shouldResetPanelWidth: Bool = false
     @State private var isDraggingDivider: Bool = false
@@ -116,10 +117,11 @@ struct BrowserShellView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                    // ─── Address bar row (hidden on start page; single centered bar is the search there) ───
+                    // ─── Address bar row (hidden on start page and AI chat; single centered bar is the search there) ───
                     if let cid = tabManager.currentTab,
                        let u = tabManager.tabURL[cid] ?? nil,
-                       u.absoluteString != "about:blank" {
+                       u.absoluteString != "about:blank",
+                       !(u.scheme == "luma" && u.host == "ai") {
                         HStack(spacing: 6) {
                             // Nav buttons (greyed out when nothing to go back/forward to)
                             HStack(spacing: 2) {
@@ -264,35 +266,20 @@ struct BrowserShellView: View {
                     if let currentId = tabManager.currentTab {
                         let currentURL = tabManager.tabURL[currentId] ?? nil
                         let isStartPage = (currentURL == nil || currentURL?.absoluteString == "about:blank")
+                        let isAIChat = currentURL?.scheme == "luma" && currentURL?.host == "ai"
                         
-                        if isStartPage {
-                            StartPageView(
-                                addressBarText: $addressBarText,
-                                historySuggestions: historySuggestions,
-                                searchSuggestions: Array(searchSuggestions.prefix(5)),
-                                onSelectHistory: { url in
-                                    historySuggestions = []
-                                    searchSuggestions = []
-                                    navigateToURL(url)
-                                },
-                                onSelectSearch: { phrase in
-                                    addressBarText = phrase
-                                    historySuggestions = []
-                                    searchSuggestions = []
-                                    navigateFromAddressBar()
-                                },
-                                onSubmit: {
-                                    applyAddressBarSubmit()
-                                },
-                                onChangeAddressBar: { fetchSearchSuggestions(for: $0) }
+                        if isStartPage || isAIChat {
+                            SmartSearchView(
+                                gemini: gemini,
+                                ollama: ollama,
+                                tabManager: tabManager,
+                                webViewWrapper: web,
+                                tabId: currentId,
+                                messages: aiChatMessagesBinding(for: currentId),
+                                onNavigate: { url in navigateToURL(url) }
                             )
+                            .id(currentId)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
-                                handleURLDrop(providers: providers) { url in
-                                    addressBarText = url.absoluteString
-                                    navigateToURL(url)
-                                }
-                            }
                         } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
                             // History page (always in its own tab)
                             // Special luma://history page
@@ -617,9 +604,11 @@ struct BrowserShellView: View {
         if let id = tabManager.currentTab {
             if let url = web.currentURL {
                 tabManager.navigate(tab: id, to: url)
-                addressBarText = (url.absoluteString == "about:blank") ? "" : url.absoluteString
+                let hide = url.absoluteString == "about:blank" || (url.scheme == "luma" && url.host == "ai")
+                addressBarText = hide ? "" : url.absoluteString
             } else if let url = tabManager.tabURL[id] ?? nil {
-                addressBarText = (url.absoluteString == "about:blank") ? "" : url.absoluteString
+                let hide = url.absoluteString == "about:blank" || (url.scheme == "luma" && url.host == "ai")
+                addressBarText = hide ? "" : url.absoluteString
             } else {
                 addressBarText = ""
             }
@@ -769,6 +758,9 @@ struct BrowserShellView: View {
                 isFirstLoad = false
                 return
             }
+            if url.host == "ai" {
+                return
+            }
         }
         
         let title: String = (url.scheme == "file") ? url.lastPathComponent : (url.host ?? url.absoluteString)
@@ -829,6 +821,13 @@ struct BrowserShellView: View {
         return true
     }
 
+    private func aiChatMessagesBinding(for tabId: UUID) -> Binding<[ChatMessage]> {
+        Binding(
+            get: { tabAIChatMessages[tabId] ?? [] },
+            set: { tabAIChatMessages[tabId] = $0 }
+        )
+    }
+
     private func toggleAIPanel() {
         guard let id = tabManager.currentTab else { return }
         if tabsWithPanelOpen.contains(id) {
@@ -872,6 +871,7 @@ struct BrowserShellView: View {
         web.removeWebView(for: id)
         tabsWithPanelOpen.remove(id)
         tabChatHistory.removeValue(forKey: id)
+        tabAIChatMessages.removeValue(forKey: id)
         tabManager.closeTab(id)
         if tabManager.currentTab == nil {
             newTab()
@@ -1442,6 +1442,7 @@ private struct TabPill: View {
         // Fallback to URL-based titles
         if url == nil || url?.absoluteString == "about:blank" { return "New Tab" }
         if url?.scheme == "luma", url?.host == "history" { return "History" }
+        if url?.scheme == "luma", url?.host == "ai" { return "AI Chat" }
         if url?.scheme == "file" { return url?.lastPathComponent ?? "File" }
         return url?.host ?? url?.absoluteString ?? "New Tab"
     }
