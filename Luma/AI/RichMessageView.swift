@@ -1,5 +1,10 @@
 // Luma — RichMessageView: combined MarkdownUI + LaTeXSwiftUI renderer
 // Used by both the AI start page (SmartSearchView) and the side AI panel (CommandSurface).
+//
+// Strategy: split the response into top-level blocks (paragraphs, code fences,
+// headings, list groups, etc.). Blocks that contain any LaTeX delimiters ($...$
+// or $$...$$) are rendered entirely by LaTeXSwiftUI; all other blocks go through
+// MarkdownUI. This avoids fragmented inline splitting that causes visual glitches.
 import SwiftUI
 import MarkdownUI
 import LaTeXSwiftUI
@@ -13,20 +18,29 @@ struct RichMessageView: View {
     var onLinkTapped: ((URL) -> Void)?
 
     var body: some View {
-        let segments = Self.splitMathSegments(rawText)
-        let hasMath = segments.contains { $0.isMath }
+        let blocks = Self.parseBlocks(rawText)
+        let anyMath = blocks.contains { $0.containsMath }
 
-        if hasMath {
-            mixedContent(segments)
+        if !anyMath {
+            markdownView(rawText)
         } else {
-            markdownOnly
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    if block.containsMath {
+                        latexBlockView(block.text)
+                    } else if !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        markdownView(block.text)
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    // MARK: - Pure markdown path (no LaTeX detected)
+    // MARK: - Renderers
 
-    private var markdownOnly: some View {
-        Markdown(rawText)
+    private func markdownView(_ text: String) -> some View {
+        Markdown(text)
             .markdownTheme(lumaTheme)
             .markdownTextStyle { FontSize(fontSize) }
             .textSelection(.enabled)
@@ -36,36 +50,121 @@ struct RichMessageView: View {
             })
     }
 
-    // MARK: - Mixed content path (markdown + LaTeX)
+    private func latexBlockView(_ text: String) -> some View {
+        LaTeX(text)
+            .parsingMode(.onlyEquations)
+            .imageRenderingMode(.template)
+            .foregroundStyle(Color.white.opacity(0.95))
+            .blockMode(.blockViews)
+            .errorMode(.original)
+            .renderingStyle(.original)
+            .renderingAnimation(.easeIn)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .font(.system(size: fontSize))
+    }
 
-    private func mixedContent(_ segments: [TextSegment]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                if segment.isMath {
-                    LaTeX(segment.text)
-                        .parsingMode(.onlyEquations)
-                        .imageRenderingMode(.template)
-                        .foregroundStyle(Color.white.opacity(0.95))
-                        .blockMode(.blockViews)
-                        .errorMode(.original)
-                        .renderingStyle(.original)
-                        .renderingAnimation(.easeIn)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .font(.system(size: fontSize))
-                } else if !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Markdown(segment.text)
-                        .markdownTheme(lumaTheme)
-                        .markdownTextStyle { FontSize(fontSize) }
-                        .textSelection(.enabled)
-                        .environment(\.openURL, OpenURLAction { url in
-                            onLinkTapped?(url)
-                            return .handled
-                        })
+    // MARK: - Block parser
+
+    struct ContentBlock {
+        let text: String
+        let containsMath: Bool
+    }
+
+    /// Splits the input into top-level blocks separated by blank lines or code
+    /// fences, then tags each block as math or not. Consecutive non-math blocks
+    /// are merged so MarkdownUI can render multi-paragraph markdown in one pass.
+    static func parseBlocks(_ input: String) -> [ContentBlock] {
+        let lines = input.components(separatedBy: "\n")
+        var rawBlocks: [String] = []
+        var current: [String] = []
+        var inCodeFence = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                if inCodeFence {
+                    current.append(line)
+                    rawBlocks.append(current.joined(separator: "\n"))
+                    current = []
+                    inCodeFence = false
+                } else {
+                    if !current.isEmpty {
+                        rawBlocks.append(current.joined(separator: "\n"))
+                        current = []
+                    }
+                    current.append(line)
+                    inCodeFence = true
                 }
+                continue
+            }
+
+            if inCodeFence {
+                current.append(line)
+                continue
+            }
+
+            if trimmed.isEmpty {
+                if !current.isEmpty {
+                    rawBlocks.append(current.joined(separator: "\n"))
+                    current = []
+                }
+            } else {
+                current.append(line)
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
+        if !current.isEmpty {
+            rawBlocks.append(current.joined(separator: "\n"))
+        }
+
+        // Tag each block and merge consecutive non-math blocks
+        var result: [ContentBlock] = []
+        var pendingMarkdown: [String] = []
+
+        for block in rawBlocks {
+            let hasMath = Self.blockContainsMath(block)
+            if hasMath {
+                if !pendingMarkdown.isEmpty {
+                    result.append(ContentBlock(
+                        text: pendingMarkdown.joined(separator: "\n\n"),
+                        containsMath: false
+                    ))
+                    pendingMarkdown = []
+                }
+                result.append(ContentBlock(text: block, containsMath: true))
+            } else {
+                pendingMarkdown.append(block)
+            }
+        }
+        if !pendingMarkdown.isEmpty {
+            result.append(ContentBlock(
+                text: pendingMarkdown.joined(separator: "\n\n"),
+                containsMath: false
+            ))
+        }
+
+        return result
+    }
+
+    /// Returns true if the block contains any LaTeX math delimiters.
+    /// Supports: $...$  $$...$$  \(...\)  \[...\]  \begin{equation}
+    /// Ignores delimiters inside code fences and inline code spans.
+    private static func blockContainsMath(_ block: String) -> Bool {
+        let trimmed = block.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("```") { return false }
+
+        var text = block
+        // Strip inline code to avoid false positives on `$var` or `\(expr\)`
+        while let start = text.range(of: "`"), let end = text[start.upperBound...].range(of: "`") {
+            text.replaceSubrange(start.lowerBound...end.lowerBound, with: " ")
+        }
+
+        if text.contains("$") { return true }
+        if text.contains("\\(") && text.contains("\\)") { return true }
+        if text.contains("\\[") && text.contains("\\]") { return true }
+        if text.contains("\\begin{equation") { return true }
+        return false
     }
 
     // MARK: - Luma dark theme for MarkdownUI
@@ -185,93 +284,5 @@ struct RichMessageView: View {
                 configuration.label
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
-    }
-
-    // MARK: - LaTeX segment splitting
-
-    struct TextSegment {
-        let text: String
-        let isMath: Bool
-    }
-
-    /// Splits input into alternating markdown and math segments.
-    /// Detects $$...$$ (block) and $...$ (inline) delimiters.
-    /// Returns pure markdown segments interleaved with math segments.
-    static func splitMathSegments(_ input: String) -> [TextSegment] {
-        var segments: [TextSegment] = []
-        var remaining = input[input.startIndex...]
-
-        while !remaining.isEmpty {
-            // Try block math $$...$$
-            if let blockStart = remaining.range(of: "$$") {
-                let before = String(remaining[remaining.startIndex..<blockStart.lowerBound])
-                if !before.isEmpty { segments.append(TextSegment(text: before, isMath: false)) }
-
-                let afterOpen = remaining[blockStart.upperBound...]
-                if let blockEnd = afterOpen.range(of: "$$") {
-                    let math = "$$" + String(afterOpen[afterOpen.startIndex..<blockEnd.lowerBound]) + "$$"
-                    segments.append(TextSegment(text: math, isMath: true))
-                    remaining = afterOpen[blockEnd.upperBound...]
-                } else {
-                    segments.append(TextSegment(text: String(remaining), isMath: false))
-                    break
-                }
-            } else if let inlineStart = findInlineMathStart(in: remaining) {
-                let before = String(remaining[remaining.startIndex..<inlineStart.lowerBound])
-                if !before.isEmpty { segments.append(TextSegment(text: before, isMath: false)) }
-
-                let afterOpen = remaining[inlineStart.upperBound...]
-                if let inlineEnd = findInlineMathEnd(in: afterOpen) {
-                    let math = "$" + String(afterOpen[afterOpen.startIndex..<inlineEnd.lowerBound]) + "$"
-                    segments.append(TextSegment(text: math, isMath: true))
-                    remaining = afterOpen[inlineEnd.upperBound...]
-                } else {
-                    segments.append(TextSegment(text: String(remaining), isMath: false))
-                    break
-                }
-            } else {
-                segments.append(TextSegment(text: String(remaining), isMath: false))
-                break
-            }
-        }
-
-        return segments
-    }
-
-    /// Finds a single `$` that starts inline math (not `$$`, not preceded by `\`).
-    private static func findInlineMathStart(in s: Substring) -> Range<String.Index>? {
-        var i = s.startIndex
-        while i < s.endIndex {
-            if s[i] == "$" {
-                let next = s.index(after: i)
-                if next < s.endIndex && s[next] == "$" {
-                    return nil
-                }
-                if i > s.startIndex {
-                    let prev = s.index(before: i)
-                    if s[prev] == "\\" { i = next; continue }
-                }
-                return i..<next
-            }
-            i = s.index(after: i)
-        }
-        return nil
-    }
-
-    /// Finds a single `$` that ends inline math.
-    private static func findInlineMathEnd(in s: Substring) -> Range<String.Index>? {
-        var i = s.startIndex
-        while i < s.endIndex {
-            if s[i] == "$" {
-                if i > s.startIndex {
-                    let prev = s.index(before: i)
-                    if s[prev] == "\\" { i = s.index(after: i); continue }
-                }
-                let next = s.index(after: i)
-                return i..<next
-            }
-            i = s.index(after: i)
-        }
-        return nil
     }
 }

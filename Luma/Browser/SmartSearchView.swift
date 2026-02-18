@@ -1085,10 +1085,7 @@ struct SmartSearchView: View {
             generateAITitle(for: query)
         }
 
-        let words = fullText.components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-
-        guard !words.isEmpty else {
+        guard !fullText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             messages[targetIndex].text = fullText
             isSending = false
             return
@@ -1096,14 +1093,21 @@ struct SmartSearchView: View {
 
         streamingTask?.cancel()
         streamingTask = Task { @MainActor in
-            var accumulated = ""
-            for (i, word) in words.enumerated() {
+            var index = fullText.startIndex
+            while index < fullText.endIndex {
                 guard !Task.isCancelled else {
                     messages[targetIndex].text = fullText
                     break
                 }
-                accumulated += (i == 0 ? "" : " ") + word
-                messages[targetIndex].text = accumulated
+                // Skip whitespace (include it in the next reveal)
+                while index < fullText.endIndex && fullText[index].isWhitespace {
+                    index = fullText.index(after: index)
+                }
+                // Advance through one word
+                while index < fullText.endIndex && !fullText[index].isWhitespace {
+                    index = fullText.index(after: index)
+                }
+                messages[targetIndex].text = String(fullText[fullText.startIndex..<index])
                 try? await Task.sleep(nanoseconds: 30_000_000)
             }
             messages[targetIndex].text = fullText
