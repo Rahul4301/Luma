@@ -136,19 +136,40 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         })();
         """
 
-    /// User-Agent: standard Chromium on macOS so Google (Gmail, AI Studio, Cloud Console) treats the app as a normal browser.
-    /// Avoids "request is suspicious" / bot detection when signing in or creating API keys.
+    /// Chrome UA for general browsing -- most sites expect Chrome.
     private static let chromeLikeUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    /// Some sites (notably certain library resolvers / enterprise portals) behave poorly with a spoofed UA
-    /// inside embedded WebKit and may render a blank page. For these hosts, prefer the default WKWebView UA.
+    /// Real Safari UA for Google sign-in. The default WKWebView UA omits the
+    /// "Version/… Safari/…" token, causing Google to reject it as an embedded
+    /// browser. This string matches a real Safari 18.3 on macOS Sequoia.
+    private static let safariUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15"
+
+    /// Hosts that need the Safari UA instead of the Chrome spoof. Google OAuth
+    /// fingerprints the rendering engine and blocks sign-in when the UA claims
+    /// Chrome but the engine is WebKit. Using a real Safari UA fixes this.
+    private static func shouldUseSafariUserAgent(for url: URL?) -> Bool {
+        guard let host = url?.host?.lowercased() else { return false }
+        if host.contains("accounts.google.com") { return true }
+        if host.contains("accounts.youtube.com") { return true }
+        if host.contains("myaccount.google.com") { return true }
+        if host.hasSuffix(".google.com") && host.contains("signin") { return true }
+        return false
+    }
+
+    /// Hosts where the bare default WKWebView UA should be used (no spoofing).
     private static func shouldUseDefaultUserAgent(for url: URL?) -> Bool {
         guard let host = url?.host?.lowercased() else { return false }
-        // Ex Libris Alma/Primo resolvers
         if host.contains("exlibrisgroup.com") { return true }
-        if host.contains("primo.exlibrisgroup.com") { return true }
         return false
+    }
+
+    /// Returns the appropriate User-Agent string for a given URL.
+    private static func userAgent(for url: URL?) -> String? {
+        if shouldUseSafariUserAgent(for: url) { return safariUserAgent }
+        if shouldUseDefaultUserAgent(for: url) { return nil }
+        return chromeLikeUserAgent
     }
 
     /// Detects "Failed to generate API key, The request is suspicious" on AI Studio so we can show an in-app explanation.
@@ -279,12 +300,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func load(url: URL, in tabId: UUID) {
         let wv = ensureWebView(for: tabId)
-        // Per-host UA override (some hosts blank-screen with spoofed UA).
-        if Self.shouldUseDefaultUserAgent(for: url) {
-            wv.customUserAgent = nil
-        } else {
-            wv.customUserAgent = Self.chromeLikeUserAgent
-        }
+        wv.customUserAgent = Self.userAgent(for: url)
         if url.isFileURL {
             // Use loadFileURL so PDF/Word/etc. display in-browser like Chrome (sandbox-safe)
             let readAccessTo = url.deletingLastPathComponent()
@@ -553,7 +569,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             decisionHandler(.download, preferences)
             return
         }
-        // Ensure JavaScript and normal web behavior so Google sign-in / API key flows work (no script blocking).
+        // Switch UA on the fly so redirects (e.g. Gmail → accounts.google.com)
+        // pick up the correct UA for the target host.
+        if let targetURL = navigationAction.request.url {
+            webView.customUserAgent = Self.userAgent(for: targetURL)
+        }
         preferences.allowsContentJavaScript = true
         decisionHandler(.allow, preferences)
     }
@@ -781,11 +801,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         }
         let wv = WKWebView(frame: .zero, configuration: configuration)
-        if Self.shouldUseDefaultUserAgent(for: requestURL) {
-            wv.customUserAgent = nil
-        } else {
-            wv.customUserAgent = WebViewWrapper.chromeLikeUserAgent
-        }
+        wv.customUserAgent = Self.userAgent(for: requestURL)
         wv.navigationDelegate = self
         wv.uiDelegate = self
         webViews[id] = wv
