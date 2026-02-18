@@ -5,7 +5,9 @@ Agents.md
 SRS.md
 Security.md
 dev_checklist.md
-# Xcode
+
+# Xcode (generated via XcodeGen — do not commit)
+*.xcodeproj
 DerivedData/
 *.xcuserstate
 xcuserdata/

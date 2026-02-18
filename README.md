@@ -1,71 +1,92 @@
-# Luma
+# **Luma Browser**
 
-A macOS browser with AI (Gemini and local/Ollama), theme-aware chrome, and a focus on privacy and local control.
+Luma is a fast, AI-powered browser built for macOS. With native SwiftUI chrome, built-in Gemini and Ollama integration, and a privacy-first design, Luma delivers a clean, intelligent browsing experience that feels at home on your Mac.
 
-## Requirements
+![macOS](https://img.shields.io/badge/macOS-15.0%2B-blue)
+![Xcode](https://img.shields.io/badge/Xcode-26.x-blue)
+![Swift](https://img.shields.io/badge/Swift-5-orange)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-- macOS 15.0+
-- Xcode 26.x (or current Xcode supporting the project’s deployment target)
-- For AI: Google Gemini API key and/or a local [Ollama](https://ollama.ai) install
+> **Warning**
+> Luma is currently in early stages of development and **not yet ready for day-to-day use**.
 
-## Build and run
+## Features
 
-1. **Clone the repo** (or your fork):
-   ```bash
-   git clone https://github.com/Rahul4301/Luma.git
-   cd Luma
+### Core Browser
+
+- Native macOS UI built with SwiftUI
+- Fast, responsive browsing powered by WebKit
+- Tab management with drag-and-drop reordering
+- Theme-aware chrome that adapts to page colors
+- Address bar with URL auto-completion and search suggestions
+- Download manager with downloads hub
+- Find in page, print support, and zoom controls
+- Browsing history with autocomplete
+
+### AI Integration
+
+- Built-in AI side panel (toggle with `Cmd+E`)
+- Google Gemini API support (API key stored securely in macOS Keychain)
+- Local Ollama support for fully on-device AI
+- Smart search on the start page
+- AI-powered command routing for browser actions
+- Chat history persistence per tab
+
+### Privacy & Security
+
+- API keys stored in macOS Keychain
+- App sandbox with minimal permissions
+- No unnecessary data collection
+- HTTPS/TLS handled by the system
+
+## Installation
+
+1. Clone the repository and run setup:
+
+```bash
+git clone https://github.com/Rahul4301/Luma.git
+cd Luma
+./scripts/setup.sh
+```
+
+2. Set up code signing (one-time):
+
+   - Open `Signing.xcconfig` (created by the setup script)
+   - Set your Apple Team ID — get it from [Apple Developer Membership](https://developer.apple.com/account#MembershipDetailsCard):
+
+   ```
+   DEVELOPMENT_TEAM = YOUR_TEAM_ID
    ```
 
-2. **Set up your own code signing** (required; see [Signing](#signing) below) so your build uses your Apple ID and doesn’t rely on the maintainer’s team.
+3. Open and build:
 
-3. **Open the project in Xcode** and build/run:
-   ```bash
-   open Luma.xcodeproj
-   ```
-   Then **Product → Run** (⌘R).
+```bash
+open Luma.xcodeproj
+```
 
-## Signing
+Then **Product > Run** (`Cmd+R`) in Xcode.
 
-Code signing is required to build and run on your Mac. Use **your own** signing identity so that:
+> **Note:** The Xcode project is generated locally via [XcodeGen](https://github.com/yonaskolb/XcodeGen) and is not checked into the repository. Always run `./scripts/setup.sh` after cloning.
 
-- You can build and run without access to the maintainer’s Apple Developer account.
-- **Your signing configuration is not committed and does not show up in PRs.**
+## Regenerating the Xcode Project
 
-### One-time setup
+If you modify `project.yml` or pull changes that affect the project structure:
 
-1. **Create your local signing config** (this file is gitignored and will not be committed):
-   ```bash
-   cp Signing.xcconfig.example Signing.xcconfig
-   ```
-
-2. **Set your Apple Team ID** in `Signing.xcconfig`:
-   - Open [Apple Developer → Membership](https://developer.apple.com/account#MembershipDetailsCard) and copy your **Team ID**.
-   - Open `Signing.xcconfig` and set:
-     ```
-     DEVELOPMENT_TEAM = YOUR_TEAM_ID
-     ```
-   - Save the file.
-
-3. **In Xcode:**
-   - Select the **Luma** project in the navigator, then the **Luma** target.
-   - Open **Signing & Capabilities**.
-   - Ensure **Automatically manage signing** is checked and that the **Team** is your team (Xcode will use `DEVELOPMENT_TEAM` from `Signing.xcconfig`).
-   - For a **personal (free) Apple ID**: if you see errors about “Associated Domains” or provisioning profiles, remove the **Associated Domains** capability for that target; personal teams don’t support it.
-
-`Signing.xcconfig` is listed in `.gitignore`, so it stays local and will **not** appear in pull requests. Do not add it to the repo.
+```bash
+xcodegen
+```
 
 ## Contributing
 
-1. Fork the repo and clone your fork.
-2. Create a branch: `git checkout -b feature/your-feature`.
-3. Set up [signing](#signing) as above so you can build and run.
-4. Make your changes. Ensure you do **not** commit:
-   - `Signing.xcconfig` or any file that contains your Team ID or signing identity.
-   - Changes that only add or modify `DEVELOPMENT_TEAM` (or similar) in the shared project file.
-5. Build and test, then commit and push to your fork.
-6. Open a pull request against the upstream repository.
+Contributions are welcome!
 
-By keeping signing in a local, gitignored file, the project stays buildable for everyone without exposing anyone’s team ID in the repo or in PRs.
+1. Fork the repo and clone your fork.
+2. Create a branch: `git checkout -b feature/your-feature`
+3. Run `./scripts/setup.sh` to generate the Xcode project and set up signing.
+4. Make your changes.
+5. Ensure you do **not** commit `Signing.xcconfig` or any file containing your Team ID.
+6. Build and test, then commit and push to your fork.
+7. Open a pull request against the upstream repository.
 
 ## License
 
