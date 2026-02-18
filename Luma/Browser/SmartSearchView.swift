@@ -55,6 +55,22 @@ struct SmartSearchView: View {
     @State private var ambiguousPillsVisible: Bool = false
     @State private var hasGeneratedTitle: Bool = false
 
+    // Thinking steps
+    @State private var thinkingSteps: [SmartThinkingStep] = []
+    @State private var isThinking: Bool = false
+    @State private var currentAITask: Task<Void, Never>? = nil
+
+    // Suggestions
+    @State private var searchSuggestions: [String] = []
+    @State private var selectedSuggestionIndex: Int = -1
+    @State private var suggestionDebounceTask: DispatchWorkItem? = nil
+    @State private var suggestionKeyMonitor: Any? = nil
+
+    // Find bar
+    @State private var showFindBar: Bool = false
+    @State private var findQuery: String = ""
+    @FocusState private var isFindFocused: Bool
+
     // Context system
     @State private var attachedDocuments: [SmartAttachedDocument] = []
     @State private var documentPickerPresented: Bool = false
@@ -88,6 +104,10 @@ struct SmartSearchView: View {
                 viewState = .aiChat
             }
             isInputFocused = true
+            installSuggestionKeyMonitor()
+        }
+        .onDisappear {
+            removeSuggestionKeyMonitor()
         }
         .sheet(isPresented: $addTabsSheetPresented) {
             SmartAddTabSheet(
@@ -119,6 +139,17 @@ struct SmartSearchView: View {
                 documentError = error.localizedDescription
             }
         }
+        .background(
+            Button("") {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    showFindBar.toggle()
+                    if showFindBar { isFindFocused = true }
+                    else { findQuery = "" }
+                }
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .hidden()
+        )
     }
 
     // MARK: - Background
@@ -134,28 +165,38 @@ struct SmartSearchView: View {
     // MARK: - Centered bar (idle + classifying)
 
     private var centeredBarLayout: some View {
-        VStack {
-            Spacer()
-            searchBar(centered: true)
-                .frame(maxWidth: SmartTokens.barMaxWidth)
-            Spacer()
+        GeometryReader { geo in
+            let topOffset = geo.size.height * 0.38
+            VStack(spacing: 0) {
+                searchBar(centered: true)
+                    .frame(maxWidth: SmartTokens.barMaxWidth)
+                suggestionsDropdown
+                    .frame(maxWidth: SmartTokens.barMaxWidth)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 32)
+            .padding(.top, topOffset)
+            .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 32)
         .transition(.opacity)
     }
 
     // MARK: - Ambiguous layout
 
     private var ambiguousLayout: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            searchBar(centered: true)
-                .frame(maxWidth: SmartTokens.barMaxWidth)
-                .padding(.bottom, 16)
-            ambiguousPills
-            Spacer()
+        GeometryReader { geo in
+            let topOffset = geo.size.height * 0.38
+            VStack(spacing: 0) {
+                searchBar(centered: true)
+                    .frame(maxWidth: SmartTokens.barMaxWidth)
+                    .padding(.bottom, 16)
+                ambiguousPills
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 32)
+            .padding(.top, topOffset)
+            .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 32)
         .transition(.opacity)
     }
 
@@ -207,10 +248,96 @@ struct SmartSearchView: View {
 
     private var chatLayout: some View {
         VStack(spacing: 0) {
-            chatThread
+            ZStack(alignment: .top) {
+                chatThread
+                if showFindBar { findBar }
+            }
             chatInputBar
         }
         .transition(.opacity)
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(SmartTokens.textTertiary)
+            TextField("Find in conversation\u{2026}", text: $findQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundColor(SmartTokens.textPrimary)
+                .focused($isFindFocused)
+                .onSubmit { scrollToNextMatch() }
+            Text(findMatchSummary)
+                .font(.system(size: 11))
+                .foregroundColor(SmartTokens.textTertiary)
+                .layoutPriority(1)
+            Button(action: { scrollToNextMatch() }) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(SmartTokens.textSecondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button(action: closeFindBar) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(SmartTokens.textSecondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .padding(.horizontal, 32)
+        .padding(.top, 8)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private var findMatchSummary: String {
+        guard !findQuery.isEmpty else { return "" }
+        let lower = findQuery.lowercased()
+        let count = messages.filter { $0.text.lowercased().contains(lower) }.count
+        return count == 0 ? "No matches" : "\(count) match\(count == 1 ? "" : "es")"
+    }
+
+    @State private var findScrollTarget: UUID? = nil
+
+    private func scrollToNextMatch() {
+        guard !findQuery.isEmpty else { return }
+        let lower = findQuery.lowercased()
+        let matching = messages.filter { $0.text.lowercased().contains(lower) }
+        guard !matching.isEmpty else { return }
+
+        if let current = findScrollTarget,
+           let idx = matching.firstIndex(where: { $0.id == current }),
+           idx + 1 < matching.count {
+            findScrollTarget = matching[idx + 1].id
+        } else {
+            findScrollTarget = matching.first?.id
+        }
+    }
+
+    private func closeFindBar() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            showFindBar = false
+            findQuery = ""
+            findScrollTarget = nil
+        }
     }
 
     private var chatThread: some View {
@@ -218,17 +345,27 @@ struct SmartSearchView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, msg in
+                        let isMatch = !findQuery.isEmpty &&
+                            msg.text.lowercased().contains(findQuery.lowercased())
                         SmartChatBubble(
                             message: msg,
                             isUser: msg.role == .user,
                             fontSize: fontSize,
                             onRetry: msg.role == .assistant ? { retryResponse(at: index) } : nil,
-                            onEdit: msg.role == .user ? { editMessage(at: index) } : nil
+                            onEdit: msg.role == .user ? { editMessage(at: index) } : nil,
+                            onLinkTapped: { url in openLinkInNewTab(url) }
                         )
+                        .id(msg.id)
                         .frame(maxWidth: SmartTokens.chatMaxWidth,
                                alignment: msg.role == .user ? .trailing : .leading)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(SmartTokens.accent.opacity(isMatch ? 0.6 : 0), lineWidth: 1.5)
+                                .padding(-4)
+                        )
+                        .animation(.easeInOut(duration: 0.2), value: isMatch)
                     }
-                    if isSending { thinkingIndicator }
+                    if isThinking || isSending { thinkingStepsView }
                     if let err = errorMessage { errorBanner(err) }
                 }
                 .frame(maxWidth: SmartTokens.chatMaxWidth)
@@ -244,21 +381,49 @@ struct SmartSearchView: View {
                     }
                 }
             }
+            .onChange(of: findScrollTarget) { _, target in
+                if let target = target {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
+                }
+            }
         }
     }
 
-    private var thinkingIndicator: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { _ in
-                Circle().fill(Color.white.opacity(0.4)).frame(width: 5, height: 5)
+    private var thinkingStepsView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(thinkingSteps) { step in
+                HStack(spacing: 8) {
+                    if step.isComplete {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(SmartTokens.accent.opacity(0.7))
+                    } else {
+                        Circle()
+                            .fill(SmartTokens.accent)
+                            .frame(width: 6, height: 6)
+                            .modifier(PulseAnimation())
+                    }
+                    Text(step.text)
+                        .font(.system(size: fontSize - 1))
+                        .foregroundColor(Color.white.opacity(step.isComplete ? 0.4 : 0.6))
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            Text("Thinking\u{2026}")
-                .font(.system(size: fontSize))
-                .foregroundColor(Color.white.opacity(0.5))
+
+            if isSending && thinkingSteps.allSatisfy({ $0.isComplete }) {
+                HStack(spacing: 4) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Circle().fill(Color.white.opacity(0.4)).frame(width: 5, height: 5)
+                    }
+                }
+                .transition(.opacity)
+            }
         }
         .frame(maxWidth: SmartTokens.chatMaxWidth, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 32)
+        .animation(.easeInOut(duration: 0.25), value: thinkingSteps.count)
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -333,18 +498,29 @@ struct SmartSearchView: View {
                 )
                 .frame(maxWidth: .infinity)
 
-                Button(action: sendChatMessage) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(inputText.isEmpty || isSending
-                                         ? Color.white.opacity(0.3)
-                                         : Color.white.opacity(0.9))
-                        .frame(width: 28, height: 36)
-                        .contentShape(Rectangle())
+                if isSending {
+                    Button(action: stopGenerating) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color.white.opacity(0.8))
+                            .frame(width: 28, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action: sendChatMessage) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(inputText.isEmpty
+                                             ? Color.white.opacity(0.3)
+                                             : Color.white.opacity(0.9))
+                            .frame(width: 28, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(inputText.isEmpty)
+                    .keyboardShortcut(.return, modifiers: [])
                 }
-                .buttonStyle(.plain)
-                .disabled(inputText.isEmpty || isSending)
-                .keyboardShortcut(.return, modifiers: [])
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -383,7 +559,11 @@ struct SmartSearchView: View {
                 .font(.system(size: 16))
                 .foregroundColor(SmartTokens.textPrimary)
                 .focused($isInputFocused)
-                .onSubmit { handleSubmit() }
+                .onSubmit { submitWithSelection() }
+                .onChange(of: inputText) { _, newValue in
+                    selectedSuggestionIndex = -1
+                    fetchSuggestions(for: newValue)
+                }
 
             if showPulse {
                 Circle()
@@ -420,13 +600,191 @@ struct SmartSearchView: View {
         }
     }
 
+    // MARK: - Suggestions dropdown
+
+    private var hasSuggestions: Bool {
+        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty
+    }
+
+    private var suggestionRows: [SmartSuggestionRow] {
+        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var rows: [SmartSuggestionRow] = []
+        rows.append(SmartSuggestionRow(icon: "bubble.left.fill", label: trimmed, suffix: "Chat", action: .chat))
+        rows.append(SmartSuggestionRow(icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
+
+        for s in searchSuggestions.prefix(6) {
+            let lower = s.lowercased()
+            if lower == trimmed.lowercased() { continue }
+            rows.append(SmartSuggestionRow(icon: "magnifyingglass", label: s, suffix: nil, action: .fillAndSearch(s)))
+        }
+        return rows
+    }
+
+    @ViewBuilder
+    private var suggestionsDropdown: some View {
+        if viewState == .idle && hasSuggestions {
+            VStack(spacing: 0) {
+                let rows = suggestionRows
+                ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                    Button(action: { applySuggestion(row) }) {
+                        HStack(spacing: 10) {
+                            Image(systemName: row.icon)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(SmartTokens.textTertiary)
+                                .frame(width: 18)
+                            Text(row.label)
+                                .font(.system(size: 14))
+                                .foregroundColor(SmartTokens.textPrimary)
+                                .lineLimit(1)
+                            if let suffix = row.suffix {
+                                Spacer()
+                                Text("— \(suffix)")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(SmartTokens.textTertiary)
+                            } else {
+                                Spacer()
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .background(
+                            idx == selectedSuggestionIndex
+                                ? Color.white.opacity(0.08)
+                                : Color.clear
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.top, 4)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+            .animation(.easeOut(duration: 0.12), value: hasSuggestions)
+        }
+    }
+
+    private func applySuggestion(_ row: SmartSuggestionRow) {
+        switch row.action {
+        case .chat:
+            clearSuggestions()
+            transitionToChat()
+        case .search:
+            let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+            clearSuggestions()
+            performSearch(query)
+        case .fillAndSearch(let text):
+            inputText = text
+            clearSuggestions()
+            performSearch(text)
+        }
+    }
+
+    private func submitWithSelection() {
+        let rows = suggestionRows
+        if selectedSuggestionIndex >= 0, selectedSuggestionIndex < rows.count {
+            applySuggestion(rows[selectedSuggestionIndex])
+        } else {
+            handleSubmit()
+        }
+    }
+
+    private func fetchSuggestions(for query: String) {
+        suggestionDebounceTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count >= 2 else {
+            searchSuggestions = []
+            return
+        }
+
+        let work = DispatchWorkItem { [trimmed] in
+            guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let url = URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") else { return }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 3
+            URLSession.shared.dataTask(with: request) { data, _, _ in
+                guard let data = data, var raw = String(data: data, encoding: .utf8) else {
+                    DispatchQueue.main.async { searchSuggestions = [] }
+                    return
+                }
+                if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
+                    raw = String(raw[start...end])
+                }
+                guard let jsonData = raw.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: jsonData) as? [Any],
+                      json.count >= 2,
+                      let rawSuggestions = json[1] as? [Any] else {
+                    DispatchQueue.main.async { searchSuggestions = [] }
+                    return
+                }
+                let phrases = rawSuggestions.compactMap { item -> String? in
+                    if let s = item as? String { return s }
+                    if let arr = item as? [Any], let first = arr.first as? String { return first }
+                    return nil
+                }
+                DispatchQueue.main.async { searchSuggestions = Array(phrases.prefix(8)) }
+            }.resume()
+        }
+        suggestionDebounceTask = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    private func clearSuggestions() {
+        searchSuggestions = []
+        selectedSuggestionIndex = -1
+    }
+
+    private func installSuggestionKeyMonitor() {
+        suggestionKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard viewState == .idle, hasSuggestions else { return event }
+            let rows = suggestionRows
+            guard !rows.isEmpty else { return event }
+
+            if event.keyCode == 125 { // Down arrow
+                DispatchQueue.main.async {
+                    selectedSuggestionIndex = min(selectedSuggestionIndex + 1, rows.count - 1)
+                }
+                return nil
+            }
+            if event.keyCode == 126 { // Up arrow
+                DispatchQueue.main.async {
+                    selectedSuggestionIndex = max(-1, selectedSuggestionIndex - 1)
+                }
+                return nil
+            }
+            return event
+        }
+    }
+
+    private func removeSuggestionKeyMonitor() {
+        if let monitor = suggestionKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            suggestionKeyMonitor = nil
+        }
+    }
+
     // MARK: - Actions
 
     private func handleSubmit() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-
         guard viewState == .idle || viewState == .ambiguous else { return }
+
+        if let url = resolveAsURL(trimmed) {
+            onNavigate(url)
+            return
+        }
 
         withAnimation(.easeOut(duration: 0.2)) { viewState = .classifying }
 
@@ -455,6 +813,80 @@ struct SmartSearchView: View {
                 }
             }
         }
+    }
+
+    private func stopGenerating() {
+        currentAITask?.cancel()
+        currentAITask = nil
+        withAnimation(.easeOut(duration: 0.2)) {
+            thinkingSteps = []
+            isThinking = false
+            isSending = false
+        }
+    }
+
+    // MARK: - URL detection + typo correction
+
+    private func resolveAsURL(_ input: String) -> URL? {
+        let lower = input.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
+            return URL(string: lower)
+        }
+
+        let tlds: Set<String> = [
+            "com", "org", "net", "edu", "gov", "io", "co", "app", "dev",
+            "me", "tv", "ai", "xyz", "info", "biz", "us", "uk", "ca",
+            "de", "fr", "jp", "au", "in", "br", "it", "nl", "ru", "ch"
+        ]
+        let parts = lower.components(separatedBy: ".")
+        if parts.count >= 2, let lastPart = parts.last {
+            let tldCandidate = lastPart.components(separatedBy: "/").first ?? lastPart
+            if tlds.contains(tldCandidate) {
+                let corrected = correctURLTypos(lower)
+                return URL(string: "https://\(corrected)")
+            }
+        }
+        return nil
+    }
+
+    private func correctURLTypos(_ input: String) -> String {
+        let corrections: [String: String] = [
+            "yuotube": "youtube", "yotube": "youtube", "youtbe": "youtube",
+            "youube": "youtube", "yotuube": "youtube", "youttube": "youtube",
+            "gogle": "google", "goggle": "google", "gooogle": "google",
+            "googlr": "google", "googel": "google", "googe": "google",
+            "twtter": "twitter", "twiter": "twitter", "tiwtter": "twitter",
+            "facebok": "facebook", "facbook": "facebook", "fcebook": "facebook",
+            "faecbook": "facebook", "faceboo": "facebook",
+            "instagra": "instagram", "instagarm": "instagram",
+            "instragram": "instagram", "instagrm": "instagram",
+            "linkdin": "linkedin", "linkeind": "linkedin", "linkeidn": "linkedin",
+            "redit": "reddit", "rediit": "reddit", "reddti": "reddit",
+            "amazo": "amazon", "amzon": "amazon", "amaozn": "amazon",
+            "netfilx": "netflix", "netfli": "netflix", "netflx": "netflix",
+            "spotfiy": "spotify", "sptoify": "spotify", "spotiy": "spotify",
+            "wikpedia": "wikipedia", "wikipdia": "wikipedia", "wikipeida": "wikipedia",
+            "githu": "github", "gihub": "github", "githb": "github",
+            "githbu": "github", "gihtub": "github",
+            "stackovreflow": "stackoverflow", "stackoverlfow": "stackoverflow",
+            "stakoverflow": "stackoverflow",
+            "chatgtp": "chatgpt", "chatgp": "chatgpt",
+            "discrod": "discord", "disocrd": "discord",
+            "tiktk": "tiktok", "tikto": "tiktok",
+            "pinterst": "pinterest", "pintrest": "pinterest",
+            "tumblr": "tumblr", "tumbrl": "tumblr",
+            "dcos": "docs", "dcso": "docs"
+        ]
+
+        var result = input
+        let dotIndex = result.firstIndex(of: ".") ?? result.endIndex
+        let domainPart = String(result[result.startIndex..<dotIndex])
+        let rest = String(result[dotIndex...])
+
+        if let corrected = corrections[domainPart] {
+            result = corrected + rest
+        }
+        return result
     }
 
     private func performSearch(_ query: String) {
@@ -496,39 +928,177 @@ struct SmartSearchView: View {
 
     private func sendAIRequest(prompt: String, isFirstMessage: Bool = false) {
         isSending = true
+        isThinking = true
         errorMessage = nil
+        thinkingSteps = []
 
-        let recentContext = Array(messages.dropLast().suffix(6))
-        let context = buildContextString()
         let capturedQuery = isFirstMessage ? prompt : nil
+        let needsWebSearch = Self.shouldWebSearch(prompt)
+        let detectedURLs = Self.extractURLs(from: prompt)
 
-        let handler: (Result<Data, Error>) -> Void = { result in
-            DispatchQueue.main.async {
-                isSending = false
-                switch result {
-                case .success(let data):
-                    if let response = try? JSONDecoder().decode(LLMResponse.self, from: data) {
-                        messages.append(ChatMessage(role: .assistant, text: response.text))
-                        if let query = capturedQuery {
-                            generateAITitle(for: query)
-                        }
-                    } else {
-                        errorMessage = "Failed to parse response"
+        let task = Task {
+            // Step 0: If the user included URLs, fetch them
+            var linkContext: String? = nil
+            if !detectedURLs.isEmpty {
+                addThinkingStep("Reading \(detectedURLs.count == 1 ? "link" : "\(detectedURLs.count) links")\u{2026}")
+                var fetched: [WebSource] = []
+                for url in detectedURLs.prefix(3) {
+                    guard !Task.isCancelled else { return }
+                    if let source = await WebSearchService.fetchSingleURL(url) {
+                        fetched.append(source)
                     }
-                case .failure(let error):
-                    errorMessage = error.localizedDescription
+                }
+                guard !Task.isCancelled else { return }
+                if !fetched.isEmpty {
+                    linkContext = WebSearchService.formatSourcesAsContext(fetched)
+                }
+                completeLastThinkingStep()
+            }
+
+            // Step 1: Optional web search
+            var webContext: String? = nil
+            if needsWebSearch && detectedURLs.isEmpty {
+                addThinkingStep("Searching the web\u{2026}")
+                do {
+                    let sources = try await WebSearchService.searchAndFetch(query: prompt, maxResults: 3)
+                    guard !Task.isCancelled else { return }
+                    if !sources.isEmpty {
+                        completeLastThinkingStep()
+                        addThinkingStep("Reading \(sources.count) source\(sources.count == 1 ? "" : "s")\u{2026}")
+                        webContext = WebSearchService.formatSourcesAsContext(sources)
+                        completeLastThinkingStep()
+                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    completeLastThinkingStep()
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            addThinkingStep("Thinking\u{2026}")
+
+            let recentContext = Array(messages.dropLast().suffix(6))
+            var contextParts: [String] = []
+            if let userContext = buildContextString() { contextParts.append(userContext) }
+            if let link = linkContext { contextParts.append(link) }
+            if let web = webContext { contextParts.append(web) }
+            let finalContext = contextParts.isEmpty ? nil : contextParts.joined(separator: "\n\n")
+
+            guard !Task.isCancelled else { return }
+
+            let handler: (Result<Data, Error>) -> Void = { result in
+                DispatchQueue.main.async {
+                    currentAITask = nil
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        thinkingSteps = []
+                        isThinking = false
+                        isSending = false
+                    }
+                    switch result {
+                    case .success(let data):
+                        if let response = try? JSONDecoder().decode(LLMResponse.self, from: data) {
+                            messages.append(ChatMessage(role: .assistant, text: response.text))
+                            if let query = capturedQuery {
+                                generateAITitle(for: query)
+                            }
+                        } else {
+                            errorMessage = "Failed to parse response"
+                        }
+                    case .failure(let error):
+                        if !Task.isCancelled {
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }
+            }
+
+            await MainActor.run {
+                switch aiProvider {
+                case .gemini:
+                    gemini.generate(prompt: prompt, context: finalContext,
+                                    recentMessages: recentContext, completion: handler)
+                case .ollama:
+                    ollama.generate(baseURLString: ollamaBaseURL, model: ollamaModel,
+                                    prompt: prompt, context: finalContext,
+                                    recentMessages: recentContext, completion: handler)
                 }
             }
         }
+        currentAITask = task
+    }
 
-        switch aiProvider {
-        case .gemini:
-            gemini.generate(prompt: prompt, context: context,
-                            recentMessages: recentContext, completion: handler)
-        case .ollama:
-            ollama.generate(baseURLString: ollamaBaseURL, model: ollamaModel,
-                            prompt: prompt, context: context,
-                            recentMessages: recentContext, completion: handler)
+    private static func extractURLs(from text: String) -> [URL] {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return []
+        }
+        let matches = detector.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        return matches.compactMap { match -> URL? in
+            guard let range = Range(match.range, in: text) else { return nil }
+            let urlStr = String(text[range])
+            return URL(string: urlStr)
+        }
+    }
+
+    private static func shouldWebSearch(_ query: String) -> Bool {
+        let lower = query.lowercased()
+        let words = lower.split(separator: " ").map(String.init)
+
+        let webSearchTriggers = [
+            "latest", "current", "recent", "today", "tonight", "yesterday",
+            "this week", "this month", "this year", "news", "score", "scores",
+            "price", "cost", "weather", "stock", "release date", "how much",
+            "when does", "when did", "when is", "when will", "who won",
+            "results", "standings", "schedule", "stats", "statistics",
+            "reviews", "rating", "ratings", "compare prices", "best deals",
+            "where to buy", "hours", "open now", "near me", "directions"
+        ]
+        for trigger in webSearchTriggers {
+            if lower.contains(trigger) { return true }
+        }
+
+        let yearPattern = try? NSRegularExpression(pattern: "\\b20[2-3]\\d\\b")
+        if let regex = yearPattern,
+           regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)) != nil {
+            return true
+        }
+
+        let noSearchVerbs: Set<String> = [
+            "write", "create", "make", "draft", "compose", "generate",
+            "rewrite", "help", "explain", "teach", "describe", "summarize",
+            "analyze", "debug", "fix", "refactor", "optimize", "convert",
+            "brainstorm", "plan", "outline", "simplify", "elaborate"
+        ]
+        if let first = words.first, noSearchVerbs.contains(first) {
+            return false
+        }
+
+        let noSearchPhrases = [
+            "how do i", "how to", "what is the difference",
+            "give me ideas", "help me", "can you", "could you",
+            "tell me about", "what should i", "why do i",
+            "pros and cons", "step by step"
+        ]
+        for phrase in noSearchPhrases {
+            if lower.contains(phrase) { return false }
+        }
+
+        return false
+    }
+
+    private func addThinkingStep(_ text: String) {
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.2)) {
+                thinkingSteps.append(SmartThinkingStep(text: text))
+            }
+        }
+    }
+
+    private func completeLastThinkingStep() {
+        DispatchQueue.main.async {
+            guard !thinkingSteps.isEmpty else { return }
+            withAnimation(.easeOut(duration: 0.15)) {
+                thinkingSteps[thinkingSteps.count - 1].isComplete = true
+            }
         }
     }
 
@@ -591,6 +1161,13 @@ struct SmartSearchView: View {
             ollama.generate(baseURLString: ollamaBaseURL, model: ollamaModel,
                             prompt: titlePrompt, context: nil, completion: handler)
         }
+    }
+
+    // MARK: - Link handling
+
+    private func openLinkInNewTab(_ url: URL) {
+        let newTabId = tabManager.newTab(url: url)
+        webViewWrapper.load(url: url, in: newTabId)
     }
 
     // MARK: - Context helpers
@@ -669,6 +1246,43 @@ struct SmartSearchView: View {
     private func removeAttachedDocument(id: UUID) {
         attachedDocuments.removeAll { $0.id == id }
     }
+
+}
+
+// MARK: - Thinking step model
+
+private struct SmartSuggestionRow: Identifiable {
+    let id = UUID()
+    let icon: String
+    let label: String
+    let suffix: String?
+    let action: SmartSuggestionAction
+}
+
+private enum SmartSuggestionAction {
+    case chat
+    case search
+    case fillAndSearch(String)
+}
+
+private struct SmartThinkingStep: Identifiable {
+    let id = UUID()
+    let text: String
+    var isComplete: Bool = false
+}
+
+private struct PulseAnimation: ViewModifier {
+    @State private var opacity: Double = 0.4
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(opacity)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+                    opacity = 1.0
+                }
+            }
+    }
 }
 
 // MARK: - Self-contained chat bubble with retry / edit
@@ -679,6 +1293,7 @@ private struct SmartChatBubble: View {
     let fontSize: CGFloat
     var onRetry: (() -> Void)?
     var onEdit: (() -> Void)?
+    var onLinkTapped: ((URL) -> Void)?
 
     private let userBubbleColor = Color.white.opacity(0.15)
     private let linkColor = Color(red: 0.4, green: 0.6, blue: 1.0)
@@ -710,7 +1325,7 @@ private struct SmartChatBubble: View {
                     .buttonStyle(.plain)
                     .transition(.opacity)
                 }
-                textView
+                userTextView
                     .padding(.horizontal, 14)
                     .padding(.vertical, 11)
                     .background(userBubbleColor)
@@ -721,23 +1336,42 @@ private struct SmartChatBubble: View {
                 withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
             }
         } else {
-            textView
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SmartMarkdownView(
+                rawText: message.text,
+                fontSize: fontSize,
+                linkColor: linkColor,
+                onLinkTapped: onLinkTapped
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
+    @State private var showCopied: Bool = false
+
     @ViewBuilder
     private var actionRow: some View {
-        if !isUser, let onRetry = onRetry {
-            HStack(spacing: 0) {
-                Button(action: onRetry) {
-                    Image(systemName: "arrow.counterclockwise")
+        if !isUser {
+            HStack(spacing: 4) {
+                if let onRetry = onRetry {
+                    Button(action: onRetry) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color.white.opacity(isHovered ? 0.6 : 0.35))
+                            .frame(width: 24, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button(action: copyToClipboard) {
+                    Image(systemName: showCopied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Color.white.opacity(isHovered ? 0.6 : 0.35))
+                        .foregroundColor(Color.white.opacity(showCopied ? 0.7 : (isHovered ? 0.6 : 0.35)))
                         .frame(width: 24, height: 20)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+
                 Spacer()
             }
             .onHover { hovering in
@@ -746,9 +1380,18 @@ private struct SmartChatBubble: View {
         }
     }
 
-    private var textView: some View {
+    private func copyToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.text, forType: .string)
+        withAnimation(.easeOut(duration: 0.15)) { showCopied = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeOut(duration: 0.15)) { showCopied = false }
+        }
+    }
+
+    private var userTextView: some View {
         Group {
-            if let attr = markdownString {
+            if let attr = userMarkdown {
                 Text(attr)
             } else {
                 Text(message.text)
@@ -762,7 +1405,7 @@ private struct SmartChatBubble: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var markdownString: AttributedString? {
+    private var userMarkdown: AttributedString? {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
         guard var attributed = try? AttributedString(markdown: message.text, options: options, baseURL: nil) else {
             return try? AttributedString(markdown: message.text)
@@ -774,6 +1417,120 @@ private struct SmartChatBubble: View {
             }
         }
         return attributed
+    }
+}
+
+// MARK: - Markdown renderer for assistant messages
+
+private struct SmartMarkdownView: View {
+    let rawText: String
+    let fontSize: CGFloat
+    let linkColor: Color
+    var onLinkTapped: ((URL) -> Void)?
+
+    private let codeBackground = Color.white.opacity(0.08)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .paragraph(let s):
+                    paragraphView(s)
+                case .codeBlock(let s):
+                    codeBlockView(s)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+    }
+
+    private enum MsgBlock { case paragraph(String); case codeBlock(String) }
+
+    private var blocks: [MsgBlock] {
+        var result: [MsgBlock] = []
+        let delim = "```"
+        var remaining = rawText
+        while true {
+            if let range = remaining.range(of: delim) {
+                let before = String(remaining[..<range.lowerBound])
+                remaining = String(remaining[range.upperBound...])
+                for p in splitParagraphs(before) { result.append(.paragraph(p)) }
+                if let close = remaining.range(of: delim) {
+                    var code = String(remaining[..<close.lowerBound])
+                    remaining = String(remaining[close.upperBound...])
+                    if let nl = code.firstIndex(of: "\n") { code = String(code[code.index(after: nl)...]) }
+                    let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { result.append(.codeBlock(trimmed)) }
+                } else {
+                    result.append(.codeBlock(remaining.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    break
+                }
+            } else {
+                for p in splitParagraphs(remaining) { result.append(.paragraph(p)) }
+                break
+            }
+        }
+        return result
+    }
+
+    private func splitParagraphs(_ text: String) -> [String] {
+        text.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    @ViewBuilder
+    private func paragraphView(_ s: String) -> some View {
+        Group {
+            if let attr = styledParagraph(s) { Text(attr) }
+            else { Text(s) }
+        }
+        .font(.system(size: fontSize))
+        .foregroundColor(Color.white.opacity(0.95))
+        .multilineTextAlignment(.leading)
+        .lineSpacing(5)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .environment(\.openURL, OpenURLAction { url in
+            onLinkTapped?(url)
+            return .handled
+        })
+    }
+
+    private func styledParagraph(_ s: String) -> AttributedString? {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+        guard var attributed = try? AttributedString(markdown: s, options: options, baseURL: nil) else {
+            guard var fallback = try? AttributedString(markdown: s) else { return nil }
+            return styleLinks(fallback)
+        }
+        return styleLinks(attributed)
+    }
+
+    private func styleLinks(_ input: AttributedString) -> AttributedString {
+        var result = input
+        for run in result.runs {
+            if run.link != nil {
+                result[run.range].foregroundColor = linkColor
+                result[run.range].underlineStyle = .single
+            }
+        }
+        return result
+    }
+
+    private func codeBlockView(_ code: String) -> some View {
+        Text(code)
+            .font(.system(size: fontSize - 1, design: .monospaced))
+            .foregroundColor(Color.white.opacity(0.9))
+            .textSelection(.enabled)
+            .multilineTextAlignment(.leading)
+            .lineSpacing(2)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(codeBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -880,7 +1637,8 @@ private struct SmartMultilineField: NSViewRepresentable {
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
-        tv.isAutomaticSpellingCorrectionEnabled = false
+        tv.isAutomaticSpellingCorrectionEnabled = true
+        tv.isContinuousSpellCheckingEnabled = true
         tv.allowsUndo = true
         tv.textContainerInset = NSSize(width: 4, height: 6)
         let ps = NSMutableParagraphStyle()

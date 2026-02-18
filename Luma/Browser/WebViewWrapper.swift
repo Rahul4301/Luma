@@ -313,6 +313,45 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webViews[tabId]?.reload()
     }
 
+    // MARK: - Find in page (Cmd+F)
+
+    func findInPage(query: String, in tabId: UUID) {
+        guard let wv = webViews[tabId], !query.isEmpty else { return }
+        let escaped = query.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        wv.evaluateJavaScript("""
+            if (window.__lumaFindHighlight) {
+                window.__lumaFindHighlight.clear();
+            }
+            window.__lumaFindHighlight = new (function() {
+                this.matches = [];
+                this.current = -1;
+                this.clear = function() {
+                    this.matches.forEach(function(m) { m.style.backgroundColor = ''; m.style.outline = ''; });
+                    this.matches = [];
+                    this.current = -1;
+                };
+            })();
+            window.getSelection().removeAllRanges();
+            window.find('\(escaped)', false, false, true);
+        """, completionHandler: nil)
+    }
+
+    func findNext(in tabId: UUID) {
+        guard let wv = webViews[tabId] else { return }
+        wv.evaluateJavaScript("window.find(window.getSelection().toString(), false, false, true);", completionHandler: nil)
+    }
+
+    func findPrevious(in tabId: UUID) {
+        guard let wv = webViews[tabId] else { return }
+        wv.evaluateJavaScript("window.find(window.getSelection().toString(), false, true, true);", completionHandler: nil)
+    }
+
+    func clearFind(in tabId: UUID) {
+        guard let wv = webViews[tabId] else { return }
+        wv.evaluateJavaScript("window.getSelection().removeAllRanges();", completionHandler: nil)
+    }
+
     // MARK: - Zoom (Cmd+ / Cmd- / Cmd0)
 
     func zoomIn(_ tabId: UUID?) {

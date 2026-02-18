@@ -44,6 +44,8 @@ struct BrowserShellView: View {
     @State private var suggestionDebounceTask: DispatchWorkItem?
     @State private var showDownloadsHub: Bool = false
     @State private var showGoogleAPIKeyHelpSheet: Bool = false
+    @State private var showBrowserFindBar: Bool = false
+    @State private var browserFindQuery: String = ""
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var downloadIconScale: CGFloat = 1
 
@@ -311,6 +313,34 @@ struct BrowserShellView: View {
                                     .padding(.top, 12)
                                     .transition(.move(edge: .top).combined(with: .opacity))
                                 }
+                                if showBrowserFindBar {
+                                    BrowserFindBar(
+                                        query: $browserFindQuery,
+                                        onFind: { query in
+                                            if let id = tabManager.currentTab {
+                                                web.findInPage(query: query, in: id)
+                                            }
+                                        },
+                                        onNext: {
+                                            if let id = tabManager.currentTab {
+                                                web.findNext(in: id)
+                                            }
+                                        },
+                                        onPrevious: {
+                                            if let id = tabManager.currentTab {
+                                                web.findPrevious(in: id)
+                                            }
+                                        },
+                                        onDismiss: {
+                                            showBrowserFindBar = false
+                                            browserFindQuery = ""
+                                            if let id = tabManager.currentTab {
+                                                web.clearFind(in: id)
+                                            }
+                                        }
+                                    )
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                                }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
@@ -514,6 +544,19 @@ struct BrowserShellView: View {
                         DispatchQueue.main.async { web.zoomReset(tabManager.currentTab) }
                         return nil
                     }
+                    // Cmd+F: find in page
+                    if key == "f" {
+                        DispatchQueue.main.async {
+                            showBrowserFindBar.toggle()
+                            if !showBrowserFindBar {
+                                browserFindQuery = ""
+                                if let id = tabManager.currentTab {
+                                    web.clearFind(in: id)
+                                }
+                            }
+                        }
+                        return nil
+                    }
                 }
                 // Address bar suggestions: Down/Up/Enter when dropdown is visible (keyboard selection + autofill)
                 if addressBarKeyState.visible {
@@ -535,6 +578,14 @@ struct BrowserShellView: View {
                     }
                 }
                 if event.keyCode == 53 {
+                    if showBrowserFindBar {
+                        DispatchQueue.main.async {
+                            showBrowserFindBar = false
+                            browserFindQuery = ""
+                            if let id = tabManager.currentTab { web.clearFind(in: id) }
+                        }
+                        return nil
+                    }
                     DispatchQueue.main.async { restoreAddressBarOnEscape = true }
                     return nil
                 }
@@ -1447,7 +1498,7 @@ private struct TabPill: View {
         return url?.host ?? url?.absoluteString ?? "New Tab"
     }
     private var tabTextColor: Color {
-        if url?.scheme == "luma", url?.host == "history" {
+        if url?.scheme == "luma" {
             return isActive ? .white : .white.opacity(0.7)
         }
         if isActive { return chromeTextIsLight ? .white : Color(white: 0.15) }
@@ -1459,7 +1510,11 @@ private struct TabPill: View {
             Button(action: onSelect) {
                 HStack(spacing: showTitle ? 6 : 0) {
                     Group {
-                        if let url = url {
+                        if let url = url, url.scheme == "luma", url.host == "ai" {
+                            Image(systemName: "bubble.left.and.bubble.right.fill")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(tabTextColor)
+                        } else if let url = url {
                             FaviconView(url: url, faviconURL: faviconURL)
                                 .frame(width: 14, height: 14)
                         } else {
@@ -1562,6 +1617,73 @@ private struct TabDropDelegate: DropDelegate {
 }
 
 /// NSView that allows window drag only when hit (used for empty toolbar space).
+// MARK: - Browser Find Bar (Cmd+F)
+
+private struct BrowserFindBar: View {
+    @Binding var query: String
+    let onFind: (String) -> Void
+    let onNext: () -> Void
+    let onPrevious: () -> Void
+    let onDismiss: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Color.white.opacity(0.5))
+            TextField("Find in page\u{2026}", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundColor(Color.white.opacity(0.9))
+                .focused($isFocused)
+                .onSubmit { onFind(query) }
+                .onChange(of: query) { _, newValue in
+                    if !newValue.isEmpty { onFind(newValue) }
+                }
+            Button(action: onPrevious) {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color.white.opacity(0.6))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button(action: onNext) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color.white.opacity(0.6))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.6))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(white: 0.15))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .frame(maxWidth: 340)
+        .padding(.trailing, 16)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .onAppear { isFocused = true }
+    }
+}
+
 private final class WindowDragRegionNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
 }
