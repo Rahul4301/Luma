@@ -1405,7 +1405,6 @@ private struct MultilineTextField: NSViewRepresentable {
         guard let tv = scrollView.documentView as? BorderedTextView else { return }
         if tv.string != text {
             tv.string = text
-            context.coordinator.recalculateHeight(tv)
         }
         tv.onSubmit = onSubmit
         tv.font = .systemFont(ofSize: fontSize)
@@ -1413,8 +1412,11 @@ private struct MultilineTextField: NSViewRepresentable {
             let w = scrollView.contentSize.width
             if w > 0 {
                 container.containerSize = NSSize(width: w, height: .greatestFiniteMagnitude)
-                context.coordinator.recalculateHeight(tv)
             }
+        }
+        // Defer height recalculation so we don't write @Binding during a view update
+        DispatchQueue.main.async {
+            context.coordinator.recalculateHeight(tv)
         }
     }
 
