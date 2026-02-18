@@ -42,6 +42,7 @@ struct BrowserShellView: View {
     @State private var historySuggestions: [(display: String, url: URL)] = []
     @StateObject private var addressBarKeyState = AddressBarKeyState()
     @State private var suggestionDebounceTask: DispatchWorkItem?
+    @State private var historyDebounceTask: DispatchWorkItem?
     @State private var showDownloadsHub: Bool = false
     @State private var showGoogleAPIKeyHelpSheet: Bool = false
     @State private var showBrowserFindBar: Bool = false
@@ -174,7 +175,7 @@ struct BrowserShellView: View {
                                         applyAddressBarSubmit()
                                     }
                                     .onChange(of: addressBarText) { _, newValue in
-                                        historySuggestions = HistoryManager.shared.urlAutocompleteSuggestions(prefix: newValue, limit: 5)
+                                        fetchHistorySuggestions(for: newValue)
                                         fetchSearchSuggestions(for: newValue)
                                     }
                                     .onChange(of: addressBarFocused) { _, focused in
@@ -203,7 +204,7 @@ struct BrowserShellView: View {
                                 RoundedRectangle(cornerRadius: 10)
                                     .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
                             )
-                            .animation(.easeInOut(duration: 0.06), value: addressBarFocused)
+                            .animation(.easeInOut(duration: 0.1), value: addressBarFocused)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
                                 handleURLDrop(providers: providers) { url in
                                     addressBarText = url.absoluteString
@@ -401,8 +402,8 @@ struct BrowserShellView: View {
                     }
                 }
 
-                    // ─── AI side panel ───────────────────────────────────────────
-                    if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId) {
+                    // ─── AI side panel (hidden on start page and AI chat) ────────
+                    if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(currentId), !isCurrentTabStartOrAIChat {
                         HStack(spacing: 0) {
                             PanelResizeHandle(panelWidth: $aiPanelWidth, windowWidth: geometry.size.width, isDragging: $isDraggingDivider)
 
@@ -480,14 +481,7 @@ struct BrowserShellView: View {
                 let key = event.charactersIgnoringModifiers ?? ""
                 if event.modifierFlags.contains(.command) {
                     if key == "e" {
-                        DispatchQueue.main.async {
-                            guard let id = tabManager.currentTab else { return }
-                            if tabsWithPanelOpen.contains(id) {
-                                tabsWithPanelOpen.remove(id)
-                            } else {
-                                tabsWithPanelOpen.insert(id)
-                            }
-                        }
+                        DispatchQueue.main.async { toggleAIPanel() }
                         return nil
                     }
                     if key == "t" {
@@ -678,6 +672,21 @@ struct BrowserShellView: View {
         }
     }
 
+    private func fetchHistorySuggestions(for query: String) {
+        historyDebounceTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count >= 2 else {
+            historySuggestions = []
+            return
+        }
+        let task = DispatchWorkItem { [trimmed] in
+            let results = HistoryManager.shared.urlAutocompleteSuggestions(prefix: trimmed, limit: 5)
+            self.historySuggestions = results
+        }
+        historyDebounceTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: task)
+    }
+
     private func fetchSearchSuggestions(for query: String) {
         suggestionDebounceTask?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -685,15 +694,15 @@ struct BrowserShellView: View {
             searchSuggestions = []
             return
         }
-        let task = DispatchWorkItem {
+        let task = DispatchWorkItem { [trimmed] in
             guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
                   let url = URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") else { return }
             var request = URLRequest(url: url)
-            request.timeoutInterval = 5
+            request.timeoutInterval = 3
             URLSession.shared.dataTask(with: request) { data, _, _ in
                 guard let data = data,
                       var raw = String(data: data, encoding: .utf8) else {
-                    DispatchQueue.main.async { searchSuggestions = [] }
+                    DispatchQueue.main.async { self.searchSuggestions = [] }
                     return
                 }
                 if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
@@ -703,7 +712,7 @@ struct BrowserShellView: View {
                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [Any],
                       json.count >= 2,
                       let rawSuggestions = json[1] as? [Any] else {
-                    DispatchQueue.main.async { searchSuggestions = [] }
+                    DispatchQueue.main.async { self.searchSuggestions = [] }
                     return
                 }
                 let phrases = rawSuggestions.compactMap { item -> String? in
@@ -712,12 +721,12 @@ struct BrowserShellView: View {
                     return nil
                 }
                 DispatchQueue.main.async {
-                    searchSuggestions = phrases.prefix(5).map { $0 }
+                    self.searchSuggestions = Array(phrases.prefix(5))
                 }
             }.resume()
         }
         suggestionDebounceTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: task)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: task)
     }
 
     private func resolveToURL(_ input: String) -> URL? {
@@ -879,8 +888,17 @@ struct BrowserShellView: View {
         )
     }
 
+    private var isCurrentTabStartOrAIChat: Bool {
+        guard let id = tabManager.currentTab,
+              let url = tabManager.tabURL[id] ?? nil else { return true }
+        if url.absoluteString == "about:blank" { return true }
+        if url.scheme == "luma" && url.host == "ai" { return true }
+        return false
+    }
+
     private func toggleAIPanel() {
         guard let id = tabManager.currentTab else { return }
+        guard !isCurrentTabStartOrAIChat else { return }
         if tabsWithPanelOpen.contains(id) {
             tabsWithPanelOpen.remove(id)
         } else {

@@ -50,7 +50,6 @@ struct SmartSearchView: View {
     @State private var errorMessage: String? = nil
     @FocusState private var isInputFocused: Bool
 
-    @State private var breatheOpacity: Double = 0.12
     @State private var pulseOpacity: Double = 0.3
     @State private var ambiguousPillsVisible: Bool = false
     @State private var hasGeneratedTitle: Bool = false
@@ -488,6 +487,7 @@ struct SmartSearchView: View {
                 }
                 .buttonStyle(.plain)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
 
                 SmartGrowingInput(
                     text: $inputText,
@@ -588,16 +588,11 @@ struct SmartSearchView: View {
                 .stroke(
                     isGlowActive
                         ? Color.white.opacity(0.25)
-                        : Color.white.opacity(breatheOpacity),
+                        : Color.white.opacity(0.09),
                     lineWidth: 1.5
                 )
         )
-        .animation(.easeInOut(duration: 0.06), value: isGlowActive)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) {
-                breatheOpacity = 0.06
-            }
-        }
+        .animation(.easeInOut(duration: 0.1), value: isGlowActive)
     }
 
     // MARK: - Suggestions dropdown
@@ -612,13 +607,13 @@ struct SmartSearchView: View {
         guard !trimmed.isEmpty else { return [] }
 
         var rows: [SmartSuggestionRow] = []
-        rows.append(SmartSuggestionRow(icon: "bubble.left.fill", label: trimmed, suffix: "Chat", action: .chat))
-        rows.append(SmartSuggestionRow(icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
+        rows.append(SmartSuggestionRow(id: "chat", icon: "bubble.left.fill", label: trimmed, suffix: "Chat", action: .chat))
+        rows.append(SmartSuggestionRow(id: "search", icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
 
-        for s in searchSuggestions.prefix(6) {
+        for (i, s) in searchSuggestions.prefix(6).enumerated() {
             let lower = s.lowercased()
             if lower == trimmed.lowercased() { continue }
-            rows.append(SmartSuggestionRow(icon: "magnifyingglass", label: s, suffix: nil, action: .fillAndSearch(s)))
+            rows.append(SmartSuggestionRow(id: "sug-\(i)", icon: "magnifyingglass", label: s, suffix: nil, action: .fillAndSearch(s)))
         }
         return rows
     }
@@ -670,8 +665,7 @@ struct SmartSearchView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .padding(.top, 4)
-            .transition(.opacity.combined(with: .move(edge: .top)))
-            .animation(.easeOut(duration: 0.12), value: hasSuggestions)
+            .transition(.opacity)
         }
     }
 
@@ -737,7 +731,7 @@ struct SmartSearchView: View {
             }.resume()
         }
         suggestionDebounceTask = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     private func clearSuggestions() {
@@ -1252,7 +1246,7 @@ struct SmartSearchView: View {
 // MARK: - Thinking step model
 
 private struct SmartSuggestionRow: Identifiable {
-    let id = UUID()
+    let id: String
     let icon: String
     let label: String
     let suffix: String?
@@ -1659,14 +1653,17 @@ private struct SmartMultilineField: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let tv = scrollView.documentView as? SmartSubmitTextView else { return }
-        if tv.string != text { tv.string = text }
+        let textChanged = tv.string != text
+        if textChanged { tv.string = text }
         tv.onSubmit = onSubmit
         tv.font = .systemFont(ofSize: fontSize)
         if let container = tv.textContainer {
             let w = scrollView.contentSize.width
             if w > 0 { container.containerSize = NSSize(width: w, height: .greatestFiniteMagnitude) }
         }
-        DispatchQueue.main.async { context.coordinator.recalculateHeight(tv) }
+        if textChanged {
+            DispatchQueue.main.async { context.coordinator.recalculateHeight(tv) }
+        }
     }
 
     class Coordinator: NSObject, NSTextViewDelegate {

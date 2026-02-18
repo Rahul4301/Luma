@@ -597,6 +597,7 @@ struct CommandSurfaceView: View {
                 }
                 .buttonStyle(.plain)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .accessibilityLabel("Add context")
                 .accessibilityHint("Choose tabs or files to add as context")
 

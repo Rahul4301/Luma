@@ -79,6 +79,7 @@ struct HistoryPageView: View {
                             .foregroundColor(textSecondary)
                     }
                     .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                 }
             }
             .padding(.horizontal, 20)
