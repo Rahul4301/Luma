@@ -74,6 +74,11 @@ struct CommandSurfaceView: View {
     @State private var addTabsSheetPresented: Bool = false
     @State private var currentTabChipId: UUID = UUID()
 
+    /// Tracks the editor's current natural height so the outer container can match it without any fixed frame.
+    @State private var editorContentHeight: CGFloat = 36
+
+    private let minInputHeight: CGFloat = 36
+
     private var chatFontSize: CGFloat { CGFloat(aiPanelFontSizeRaw) }
 
     private var aiProvider: AIProvider {
@@ -97,6 +102,10 @@ struct CommandSurfaceView: View {
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: PanelTokens.cornerRadiusLarge, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: PanelTokens.cornerRadiusLarge, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
         .onAppear {
             loadPageContext()
         }
@@ -176,6 +185,7 @@ struct CommandSurfaceView: View {
         actionProposedMessage = nil
         conversationSummary = nil
         lastSummarizedMessageCount = 0
+        editorContentHeight = minInputHeight
         loadPageContext() // Reload current page context
     }
 
@@ -438,7 +448,7 @@ struct CommandSurfaceView: View {
     private func conversationStream() -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 20) {
                     if messages.isEmpty {
                         emptyConversationState()
                     } else {
@@ -446,6 +456,7 @@ struct CommandSurfaceView: View {
                             ChatBubble(message: msg, isUser: msg.role == .user, fontSize: chatFontSize) { url in
                                 openLinkInNewTab(url)
                             }
+                            .frame(maxWidth: 720, alignment: msg.role == .user ? .trailing : .leading)
                         }
                         if isSending {
                             loadingIndicator()
@@ -461,7 +472,7 @@ struct CommandSurfaceView: View {
             .frame(maxHeight: .infinity)
             .onChange(of: messages.count) { _, _ in
                 if let last = messages.last {
-                    withAnimation(.easeOut(duration: 0.18)) {
+                    withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
@@ -524,15 +535,17 @@ struct CommandSurfaceView: View {
         .accessibilityLabel("Error: \(message)")
     }
 
-    // MARK: - Input area (minimal - start page style with context tabs)
+    // MARK: - Input area
+    //
+    // Glass rounded-rect box (start page style). Grows to show all typed text.
+    // No internal scrolling — you always see everything before sending.
 
     private func inputArea() -> some View {
         VStack(spacing: 0) {
-            // Context tabs row: current tab + attached files as mini tabs
+            // Context tabs row
             if includeCurrentTab || !includedOtherTabIds.isEmpty || !attachedDocuments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        // Current tab context tab
                         if includeCurrentTab {
                             contextTab(
                                 id: currentTabChipId,
@@ -541,8 +554,6 @@ struct CommandSurfaceView: View {
                                 onRemove: { includeCurrentTab = false }
                             )
                         }
-
-                        // Other included tabs
                         ForEach(includedOtherTabIds, id: \.self) { otherId in
                             contextTab(
                                 id: otherId,
@@ -552,8 +563,6 @@ struct CommandSurfaceView: View {
                                 leadingSymbol: "square.stack.3d.up"
                             )
                         }
-                        
-                        // Attached file tabs
                         ForEach(attachedDocuments) { doc in
                             contextTab(
                                 id: doc.id,
@@ -568,10 +577,10 @@ struct CommandSurfaceView: View {
                 .frame(height: 32)
                 .padding(.bottom, 8)
             }
-            
-            // Input row: "+" button + text box with send button
-            HStack(spacing: 10) {
-                // "+" button for adding context (tabs or files) - inline menu
+
+            let isGlowActive = isInputFocused || !inputText.isEmpty
+
+            HStack(alignment: .bottom, spacing: 0) {
                 Menu {
                     Button(action: { addTabsSheetPresented = true }) {
                         Label("Tabs", systemImage: "square.stack.3d.up")
@@ -581,60 +590,58 @@ struct CommandSurfaceView: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundColor(PanelTokens.textSecondary)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 32, height: minInputHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .menuStyle(.borderlessButton)
                 .accessibilityLabel("Add context")
                 .accessibilityHint("Choose tabs or files to add as context")
-                
-                // Text box with send button inside
-                let isGlowActive = isInputFocused || !inputText.isEmpty
-                ZStack(alignment: .trailing) {
-                    GrowingTextEditor(
-                        text: $inputText,
-                        placeholder: "Ask a question about this page...",
-                        minHeight: 36,
-                        fontSize: chatFontSize,
-                        isFocused: $isInputFocused,
-                        onSubmit: sendCommand
-                    )
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, maxHeight: 80)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(Color.white.opacity(0.08))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(isGlowActive ? Color.white.opacity(0.25) : Color.clear, lineWidth: 1.5)
-                    )
-                    .animation(.easeInOut(duration: 0.06), value: isGlowActive)
-                    .accessibilityLabel("Message input")
-                    .accessibilityHint("Type your message. Enter to send.")
-                    
-                    // Send button inside text box, right side
-                    HStack {
-                        Spacer()
-                        Button(action: sendCommand) {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(inputText.isEmpty || isSending ? Color.white.opacity(0.3) : Color.white.opacity(0.9))
-                                .frame(width: 24, height: 24)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(inputText.isEmpty || isSending)
-                        .keyboardShortcut(.return, modifiers: [])
-                        .accessibilityLabel("Send message")
-                        .padding(.trailing, 12)
-                    }
+
+                GrowingTextEditor(
+                    text: $inputText,
+                    placeholder: "Ask a question about this page...",
+                    minHeight: minInputHeight,
+                    fontSize: chatFontSize,
+                    isFocused: $isInputFocused,
+                    onSubmit: sendCommand,
+                    reportedHeight: $editorContentHeight
+                )
+                .frame(maxWidth: .infinity)
+
+                Button(action: sendCommand) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(inputText.isEmpty || isSending
+                                         ? Color.white.opacity(0.3)
+                                         : Color.white.opacity(0.9))
+                        .frame(width: 28, height: minInputHeight)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .disabled(inputText.isEmpty || isSending)
+                .keyboardShortcut(.return, modifiers: [])
+                .accessibilityLabel("Send message")
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isGlowActive ? Color.white.opacity(0.25) : Color.clear, lineWidth: 1.5)
+            )
+            .animation(.easeInOut(duration: 0.06), value: isGlowActive)
+            .accessibilityLabel("Message input")
+            .accessibilityHint("Type your message. Enter to send.")
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
         }
@@ -677,19 +684,30 @@ struct CommandSurfaceView: View {
                         .background(userBubbleColor)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .frame(maxWidth: .infinity, alignment: .trailing)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     messageTextView
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if !isUser { Spacer(minLength: 32) }
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
 
-        private func styledAttributedString() -> AttributedString? {
-            guard var attributed = try? AttributedString(markdown: message.text) else {
-                return nil
+        private func styledAttributedString(for string: String) -> AttributedString? {
+            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+            guard var attributed = try? AttributedString(markdown: string, options: options, baseURL: nil) else {
+                guard var fallback = try? AttributedString(markdown: string) else { return nil }
+                for run in fallback.runs {
+                    if run.link != nil {
+                        let range = run.range
+                        fallback[range].foregroundColor = linkColor
+                        fallback[range].underlineStyle = .single
+                    }
+                }
+                return fallback
             }
-            // Style links to be visible (blue + underlined)
             for run in attributed.runs {
                 if run.link != nil {
                     let range = run.range
@@ -702,25 +720,168 @@ struct CommandSurfaceView: View {
 
         @ViewBuilder
         private var messageTextView: some View {
+            if isUser {
+                singleBlockMessageView
+            } else {
+                MarkdownFormattedMessageView(
+                    rawText: message.text,
+                    fontSize: fontSize,
+                    textColor: assistantTextColor,
+                    linkColor: linkColor,
+                    onLinkTapped: onLinkTapped
+                )
+            }
+        }
+
+        @ViewBuilder
+        private var singleBlockMessageView: some View {
             Group {
-                if let attributed = styledAttributedString() {
+                if let attributed = styledAttributedString(for: message.text) {
                     Text(attributed)
                 } else {
                     Text(message.text)
                 }
             }
             .font(.system(size: fontSize))
-            .foregroundColor(isUser ? Color.white.opacity(0.95) : assistantTextColor)
+            .foregroundColor(Color.white.opacity(0.95))
             .textSelection(.enabled)
             .multilineTextAlignment(.leading)
-            .lineSpacing(isUser ? 0 : 5)
+            .lineSpacing(5)
             .fixedSize(horizontal: false, vertical: true)
             .environment(\.openURL, OpenURLAction { url in
                 onLinkTapped(url)
                 return .handled
             })
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(isUser ? "You: \(message.text)" : "Assistant: \(message.text)")
+            .accessibilityLabel("You: \(message.text)")
+        }
+    }
+
+    /// Renders assistant message as formatted blocks: paragraphs with spacing, code blocks with monospace background.
+    private struct MarkdownFormattedMessageView: View {
+        let rawText: String
+        let fontSize: CGFloat
+        let textColor: Color
+        let linkColor: Color
+        let onLinkTapped: (URL) -> Void
+
+        private let codeBackground = Color.white.opacity(0.08)
+        private let codeCornerRadius: CGFloat = 8
+        private let blockSpacing: CGFloat = 10
+        private let paragraphLineSpacing: CGFloat = 5
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: blockSpacing) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    switch block {
+                    case .paragraph(let s):
+                        paragraphView(s)
+                    case .codeBlock(let s):
+                        codeBlockView(s)
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(rawText)
+        }
+
+        private var blocks: [MessageBlock] {
+            var result: [MessageBlock] = []
+            let codeDelimiter = "```"
+            var remaining = rawText
+            while true {
+                if let range = remaining.range(of: codeDelimiter) {
+                    let before = String(remaining[..<range.lowerBound])
+                    remaining = String(remaining[range.upperBound...])
+                    for paragraph in splitParagraphs(before) {
+                        if !paragraph.isEmpty { result.append(.paragraph(paragraph)) }
+                    }
+                    if let close = remaining.range(of: codeDelimiter) {
+                        let code = String(remaining[..<close.lowerBound])
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        remaining = String(remaining[close.upperBound...])
+                        if !code.isEmpty { result.append(.codeBlock(code)) }
+                    } else {
+                        result.append(.codeBlock(remaining.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        break
+                    }
+                } else {
+                    for paragraph in splitParagraphs(remaining) {
+                        if !paragraph.isEmpty { result.append(.paragraph(paragraph)) }
+                    }
+                    break
+                }
+            }
+            return result
+        }
+
+        private func splitParagraphs(_ text: String) -> [String] {
+            text.components(separatedBy: "\n\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+
+        @ViewBuilder
+        private func paragraphView(_ s: String) -> some View {
+            Group {
+                if let attributed = attributedParagraph(s) {
+                    Text(attributed)
+                } else {
+                    Text(s)
+                }
+            }
+            .font(.system(size: fontSize))
+            .foregroundColor(textColor)
+            .multilineTextAlignment(.leading)
+            .lineSpacing(paragraphLineSpacing)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .environment(\.openURL, OpenURLAction { url in
+                onLinkTapped(url)
+                return .handled
+            })
+        }
+
+        private func attributedParagraph(_ s: String) -> AttributedString? {
+            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+            guard var attributed = try? AttributedString(markdown: s, options: options, baseURL: nil) else {
+                return (try? AttributedString(markdown: s)).flatMap { styleLinks($0) }
+            }
+            return styleLinks(attributed)
+        }
+
+        private func styleLinks(_ attributed: AttributedString) -> AttributedString {
+            var result = attributed
+            for run in result.runs {
+                if run.link != nil {
+                    let range = run.range
+                    result[range].foregroundColor = linkColor
+                    result[range].underlineStyle = .single
+                }
+            }
+            return result
+        }
+
+        private func codeBlockView(_ code: String) -> some View {
+            Text(code)
+                .font(.system(size: fontSize - 1, design: .monospaced))
+                .foregroundColor(Color.white.opacity(0.9))
+                .textSelection(.enabled)
+                .multilineTextAlignment(.leading)
+                .lineSpacing(2)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(codeBackground)
+                .clipShape(RoundedRectangle(cornerRadius: codeCornerRadius, style: .continuous))
+        }
+
+        private enum MessageBlock {
+            case paragraph(String)
+            case codeBlock(String)
         }
     }
 
@@ -911,6 +1072,7 @@ struct CommandSurfaceView: View {
         actionProposedMessage = nil
         attachedDocuments = []
         includeCurrentTab = true
+        editorContentHeight = minInputHeight
     }
 
     /// Loads page context (title + visible text) when panel appears.
@@ -1140,14 +1302,11 @@ struct CommandSurfaceView: View {
     }
 }
 
-// MARK: - Growing multiline text editor
-
-private struct TextHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
+// MARK: - GrowingTextEditor
+//
+// Height comes from the NSTextView's own layout manager — no invisible Text
+// mirror, no PreferenceKey. The NSTextView reports its content height after
+// every keystroke; the SwiftUI frame follows.
 
 private struct GrowingTextEditor: View {
     @Binding var text: String
@@ -1156,167 +1315,159 @@ private struct GrowingTextEditor: View {
     var fontSize: CGFloat = 13
     @FocusState.Binding var isFocused: Bool
     var onSubmit: (() -> Void)? = nil
+    @Binding var reportedHeight: CGFloat
 
-    /// Height from content; no upper bound so the whole query is visible.
-    @State private var contentHeight: CGFloat = 36
+    @State private var textHeight: CGFloat = 36
 
-    private var font: Font { Font.system(size: fontSize) }
-    private let textColor = Color.white.opacity(0.95)
+    private var font: Font { .system(size: fontSize) }
     private let placeholderColor = Color.white.opacity(0.5)
-
-    private var boxHeight: CGFloat {
-        max(minHeight, contentHeight)
-    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // Measure content height using invisible text (opacity 0 so no double-text overlay)
-            Text(text.isEmpty ? " " : text)
-                .font(font)
-                .foregroundColor(textColor)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(8)
-                .opacity(0)
-                .background(
-                    GeometryReader { g in
-                        Color.clear.preference(key: TextHeightKey.self, value: g.size.height)
-                    }
-                )
-                .allowsHitTesting(false)
-
-            EnterSubmittingTextEditor(
+            MultilineTextField(
                 text: $text,
                 fontSize: fontSize,
+                dynamicHeight: $textHeight,
                 minHeight: minHeight,
                 onSubmit: onSubmit
             )
             .focused($isFocused)
-            .frame(height: boxHeight)
 
             if text.isEmpty {
                 Text(placeholder)
                     .font(font)
                     .foregroundColor(placeholderColor)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .frame(height: boxHeight)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                     .allowsHitTesting(false)
             }
         }
-        .frame(height: boxHeight)
-        .onPreferenceChange(TextHeightKey.self) { h in
-            contentHeight = max(minHeight, h)
-        }
+        .frame(height: textHeight)
+        .onChange(of: textHeight) { _, h in reportedHeight = h }
+        .onAppear { reportedHeight = textHeight }
+        .animation(.easeOut(duration: 0.15), value: textHeight)
     }
 }
 
-// MARK: - Enter-submitting NSTextView (Return/Enter sends, Shift+Return newline)
+// MARK: - MultilineTextField (NSTextView wrapper)
+//
+// Reports its own content height via `dynamicHeight` using the layout manager.
+// No internal scrolling — the view always shows all text.
 
-/// NSTextView subclass that submits on Enter/Return and inserts newline on Shift+Enter.
-private final class EnterSubmittingField: NSTextView {
+private struct MultilineTextField: NSViewRepresentable {
+    @Binding var text: String
+    var fontSize: CGFloat
+    @Binding var dynamicHeight: CGFloat
+    var minHeight: CGFloat
     var onSubmit: (() -> Void)?
 
-    override func keyDown(with event: NSEvent) {
-        let isReturn = event.keyCode == 36   // main Return
-        let isKeypadEnter = event.keyCode == 76
-        let isSubmitKey = (isReturn || isKeypadEnter) && !event.modifierFlags.contains(.shift)
-        if isSubmitKey {
-            onSubmit?()
-            return
-        }
-        super.keyDown(with: event)
-    }
-}
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-private final class EnterSubmittingTextView: NSScrollView {
-    private let onSubmit: (() -> Void)?
-    private var textView: EnterSubmittingField!
-    var onTextChange: ((String) -> Void)?
-    var fontSize: CGFloat = 13 { didSet { textView?.font = .systemFont(ofSize: fontSize) } }
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
 
-    init(onSubmit: (() -> Void)?, fontSize: CGFloat) {
-        self.onSubmit = onSubmit
-        self.fontSize = fontSize
-        super.init(frame: .zero)
-        hasVerticalScroller = true
-        hasHorizontalScroller = false
-        autohidesScrollers = true
-        borderType = .noBorder
-        drawsBackground = false
-
-        let tv = EnterSubmittingField()
+        let tv = BorderedTextView()
+        tv.delegate = context.coordinator
         tv.onSubmit = onSubmit
         tv.isRichText = false
         tv.drawsBackground = false
         tv.font = .systemFont(ofSize: fontSize)
-        tv.textColor = NSColor(white: 0.9, alpha: 1)
+        tv.textColor = NSColor(white: 0.95, alpha: 1)
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
-        let contentSize = self.contentSize
-        tv.frame = NSRect(origin: .zero, size: contentSize)
-        tv.minSize = NSSize(width: 0, height: contentSize.height)
-        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.isAutomaticSpellingCorrectionEnabled = false
+        tv.allowsUndo = true
+        tv.textContainerInset = NSSize(width: 4, height: 6)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 5
+        tv.defaultParagraphStyle = paragraphStyle
+        tv.typingAttributes[.paragraphStyle] = paragraphStyle
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
         tv.autoresizingMask = [.width]
+        tv.textContainer?.widthTracksTextView = true
+        tv.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        scrollView.documentView = tv
+        context.coordinator.textView = tv
 
-        if let container = tv.textContainer {
-            container.widthTracksTextView = true
-            container.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)}
-        tv.isSelectable = true
-        documentView = tv
-        textView = tv
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func setDelegate(_ delegate: NSTextViewDelegate?) {
-        textView.delegate = delegate
-    }
-
-    func setText(_ string: String) {
-        textView.string = string
-    }
-}
-
-private struct EnterSubmittingTextEditor: NSViewRepresentable {
-    @Binding var text: String
-    var fontSize: CGFloat
-    var minHeight: CGFloat
-    var onSubmit: (() -> Void)?
-
-    func makeNSView(context: Context) -> EnterSubmittingTextView {
-        let view = EnterSubmittingTextView(onSubmit: onSubmit, fontSize: fontSize)
-        view.setText(text)
-        view.setDelegate(context.coordinator)
-        return view
-    }
-
-    func updateNSView(_ nsView: EnterSubmittingTextView, context: Context) {
-        if let tv = nsView.documentView as? EnterSubmittingField {
-            if tv.string != text { tv.string = text }
-            tv.onSubmit = onSubmit
+        DispatchQueue.main.async {
+            context.coordinator.recalculateHeight(tv)
         }
-        nsView.fontSize = fontSize
+        return scrollView
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let tv = scrollView.documentView as? BorderedTextView else { return }
+        if tv.string != text {
+            tv.string = text
+            context.coordinator.recalculateHeight(tv)
+        }
+        tv.onSubmit = onSubmit
+        tv.font = .systemFont(ofSize: fontSize)
+        if let container = tv.textContainer {
+            let w = scrollView.contentSize.width
+            if w > 0 {
+                container.containerSize = NSSize(width: w, height: .greatestFiniteMagnitude)
+                context.coordinator.recalculateHeight(tv)
+            }
+        }
     }
 
     class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: EnterSubmittingTextEditor
+        var parent: MultilineTextField
+        weak var textView: BorderedTextView?
 
-        init(_ parent: EnterSubmittingTextEditor) {
+        init(_ parent: MultilineTextField) {
             self.parent = parent
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            recalculateHeight(textView)
         }
+
+        func recalculateHeight(_ textView: NSTextView) {
+            guard let container = textView.textContainer,
+                  let manager = textView.layoutManager else { return }
+            manager.ensureLayout(for: container)
+            let usedRect = manager.usedRect(for: container)
+            let inset = textView.textContainerInset
+            let newHeight = usedRect.height + inset.height * 2
+            let clamped = max(parent.minHeight, newHeight)
+            if abs(clamped - parent.dynamicHeight) > 0.5 {
+                parent.dynamicHeight = clamped
+            }
+        }
+    }
+}
+
+private class BorderedTextView: NSTextView {
+    var onSubmit: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36
+        let isKeypadEnter = event.keyCode == 76
+        let isSubmitKey = (isReturn || isKeypadEnter) && !event.modifierFlags.contains(.shift)
+
+        if isSubmitKey {
+            onSubmit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Allow Cmd+A, Cmd+C, Cmd+V, Cmd+X to work
+        if event.modifierFlags.contains(.command) {
+            return super.performKeyEquivalent(with: event)
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }
 
