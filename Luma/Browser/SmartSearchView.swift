@@ -22,7 +22,7 @@ private enum SmartTokens {
     static let errorText     = Color(red: 0.95, green: 0.55, blue: 0.55)
     static let surfaceElevated = Color(white: 0.14)
     static let cornerRadius: CGFloat  = 14
-    static let barMaxWidth: CGFloat   = 600
+    static let barMaxWidth: CGFloat   = 680
     static let chatMaxWidth: CGFloat  = 720
 }
 
@@ -51,6 +51,8 @@ struct SmartSearchView: View {
     @State private var hasGeneratedTitle: Bool = false
     @State private var searchBarOffset: CGFloat = 0
     @State private var previousInputLength: Int = 0
+    @State private var currentIntent: QueryIntent = .ai
+    @State private var streamingTask: Task<Void, Never>? = nil
 
     // Thinking steps
     @State private var thinkingSteps: [SmartThinkingStep] = []
@@ -188,9 +190,7 @@ struct SmartSearchView: View {
                     .padding(.bottom, 8)
                 }
 
-                searchBar(centered: true)
-                    .frame(maxWidth: SmartTokens.barMaxWidth)
-                suggestionsDropdown
+                unifiedSearchCard
                     .frame(maxWidth: SmartTokens.barMaxWidth)
                 Spacer(minLength: 0)
             }
@@ -508,62 +508,97 @@ struct SmartSearchView: View {
         .padding(.bottom, 20)
     }
 
-    // MARK: - Search bar
+    // MARK: - Unified search card (Dia-style two-row layout)
 
-    private func searchBar(centered: Bool) -> some View {
+    private var unifiedSearchCard: some View {
         let isGlowActive = isInputFocused || !inputText.isEmpty
+        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        return HStack(spacing: 0) {
-            Menu {
-                Button(action: { addTabsSheetPresented = true }) {
-                    Label("Tabs", systemImage: "square.stack.3d.up")
-                }
-                Button(action: { documentPickerPresented = true }) {
-                    Label("Files", systemImage: "doc.fill")
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .medium))
+        return VStack(spacing: 0) {
+            // Row 1: icon + text field
+            HStack(spacing: 8) {
+                Image(systemName: currentIntent == .ai ? "bubble.left.fill" : "magnifyingglass")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(SmartTokens.textTertiary)
+                    .frame(width: 20)
+                    .animation(.easeInOut(duration: 0.15), value: currentIntent)
+
+                TextField("Ask anything\u{2026}", text: $inputText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 16))
+                    .foregroundColor(SmartTokens.textPrimary)
+                    .focused($isInputFocused)
+                    .onSubmit { submitWithSelection() }
+                    .onChange(of: inputText) { _, newValue in
+                        selectedSuggestionIndex = -1
+                        fetchSuggestions(for: newValue)
+                        handlePasteDetection(newValue)
+                        let t = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let hasContext = !attachedDocuments.isEmpty || !includedOtherTabIds.isEmpty
+                        currentIntent = t.isEmpty ? .ai : (hasContext ? .ai : QueryClassifier.classify(t))
+                    }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            // Inline suggestions (between rows)
+            if viewState == .idle && !trimmed.isEmpty {
+                inlineSuggestions
+            }
+
+            // Divider when suggestions are showing
+            if viewState == .idle && !trimmed.isEmpty {
+                Rectangle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(height: 1)
+                    .padding(.horizontal, 8)
+            }
+
+            // Row 2: action pills + submit
+            HStack(spacing: 8) {
+                Menu {
+                    Button(action: { addTabsSheetPresented = true }) {
+                        Label("Add tabs", systemImage: "square.stack.3d.up")
+                    }
+                    Button(action: { documentPickerPresented = true }) {
+                        Label("Add files", systemImage: "doc.fill")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Add tabs or files")
+                            .font(.system(size: 12, weight: .medium))
+                    }
                     .foregroundColor(SmartTokens.textSecondary)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-
-            TextField("Search or ask anything\u{2026}", text: $inputText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 16))
-                .foregroundColor(SmartTokens.textPrimary)
-                .focused($isInputFocused)
-                .onSubmit { submitWithSelection() }
-                .onChange(of: inputText) { _, newValue in
-                    selectedSuggestionIndex = -1
-                    fetchSuggestions(for: newValue)
-                    handlePasteDetection(newValue)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+                    .contentShape(Capsule())
                 }
+                .buttonStyle(.plain)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
 
-            Button(action: { submitWithSelection() }) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                     ? Color.white.opacity(0.2)
-                                     : Color.white.opacity(0.9))
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
+                Spacer()
+
+                // Dynamic submit button
+                submitButton(trimmed: trimmed)
             }
-            .buttonStyle(.plain)
-            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: SmartTokens.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white.opacity(0.08))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: SmartTokens.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(
                     isGlowActive
                         ? Color.white.opacity(0.25)
@@ -571,10 +606,45 @@ struct SmartSearchView: View {
                     lineWidth: 1.5
                 )
         )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .animation(.easeInOut(duration: 0.1), value: isGlowActive)
     }
 
-    // MARK: - Suggestions dropdown
+    // MARK: - Dynamic submit button
+
+    @ViewBuilder
+    private func submitButton(trimmed: String) -> some View {
+        if trimmed.isEmpty {
+            Button(action: { submitWithSelection() }) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(Color.white.opacity(0.15))
+            }
+            .buttonStyle(.plain)
+            .disabled(true)
+        } else {
+            Button(action: { submitWithSelection() }) {
+                HStack(spacing: 4) {
+                    Text(currentIntent == .ai ? "Chat" : "Google")
+                        .font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "return")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundColor(Color.black)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.92))
+                )
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+            .animation(.easeOut(duration: 0.15), value: currentIntent)
+        }
+    }
+
+    // MARK: - Inline suggestions
 
     private var hasSuggestions: Bool {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -586,8 +656,14 @@ struct SmartSearchView: View {
         guard !trimmed.isEmpty else { return [] }
 
         var rows: [SmartSuggestionRow] = []
-        rows.append(SmartSuggestionRow(id: "chat", icon: "bubble.left.fill", label: trimmed, suffix: "Chat", action: .chat))
-        rows.append(SmartSuggestionRow(id: "search", icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
+
+        if currentIntent == .ai {
+            rows.append(SmartSuggestionRow(id: "chat", icon: "bubble.left.fill", label: trimmed, suffix: "Chat", action: .chat))
+            rows.append(SmartSuggestionRow(id: "search", icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
+        } else {
+            rows.append(SmartSuggestionRow(id: "search", icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
+            rows.append(SmartSuggestionRow(id: "chat", icon: "bubble.left.fill", label: trimmed, suffix: "Chat", action: .chat))
+        }
 
         for (i, s) in searchSuggestions.prefix(6).enumerated() {
             let lower = s.lowercased()
@@ -598,54 +674,42 @@ struct SmartSearchView: View {
     }
 
     @ViewBuilder
-    private var suggestionsDropdown: some View {
-        if viewState == .idle && hasSuggestions {
-            VStack(spacing: 0) {
-                let rows = suggestionRows
-                ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
-                    Button(action: { applySuggestion(row) }) {
-                        HStack(spacing: 10) {
-                            Image(systemName: row.icon)
-                                .font(.system(size: 12, weight: .medium))
+    private var inlineSuggestions: some View {
+        VStack(spacing: 0) {
+            let rows = suggestionRows
+            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                Button(action: { applySuggestion(row) }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: row.icon)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(SmartTokens.textTertiary)
+                            .frame(width: 18)
+                        Text(row.label)
+                            .font(.system(size: 14))
+                            .foregroundColor(SmartTokens.textPrimary)
+                            .lineLimit(1)
+                        if let suffix = row.suffix {
+                            Spacer()
+                            Text("— \(suffix)")
+                                .font(.system(size: 12))
                                 .foregroundColor(SmartTokens.textTertiary)
-                                .frame(width: 18)
-                            Text(row.label)
-                                .font(.system(size: 14))
-                                .foregroundColor(SmartTokens.textPrimary)
-                                .lineLimit(1)
-                            if let suffix = row.suffix {
-                                Spacer()
-                                Text("— \(suffix)")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(SmartTokens.textTertiary)
-                            } else {
-                                Spacer()
-                            }
+                        } else {
+                            Spacer()
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                        .background(
-                            idx == selectedSuggestionIndex
-                                ? Color.white.opacity(0.08)
-                                : Color.clear
-                        )
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(
+                        idx == selectedSuggestionIndex
+                            ? Color.white.opacity(0.08)
+                            : Color.clear
+                    )
                 }
+                .buttonStyle(.plain)
             }
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .padding(.top, 4)
-            .transition(.opacity)
         }
+        .padding(.vertical, 4)
+        .transition(.opacity)
     }
 
     private func applySuggestion(_ row: SmartSuggestionRow) {
@@ -796,6 +860,7 @@ struct SmartSearchView: View {
     private func stopGenerating() {
         currentAITask?.cancel()
         currentAITask = nil
+        skipStreaming()
         withAnimation(.easeOut(duration: 0.2)) {
             thinkingSteps = []
             isThinking = false
@@ -906,9 +971,10 @@ struct SmartSearchView: View {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else { return }
 
+        let isFirst = messages.isEmpty
         messages.append(ChatMessage(role: .user, text: trimmed))
         inputText = ""
-        sendAIRequest(prompt: trimmed)
+        sendAIRequest(prompt: trimmed, isFirstMessage: isFirst)
     }
 
     private func sendAIRequest(prompt: String, isFirstMessage: Bool = false) {
@@ -977,19 +1043,17 @@ struct SmartSearchView: View {
                     withAnimation(.easeOut(duration: 0.3)) {
                         thinkingSteps = []
                         isThinking = false
-                        isSending = false
                     }
                     switch result {
                     case .success(let data):
                         if let response = try? JSONDecoder().decode(LLMResponse.self, from: data) {
-                            messages.append(ChatMessage(role: .assistant, text: response.text))
-                            if let query = capturedQuery {
-                                generateAITitle(for: query)
-                            }
+                            streamResponseWordByWord(response.text, capturedQuery: capturedQuery)
                         } else {
+                            isSending = false
                             errorMessage = "Failed to parse response"
                         }
                     case .failure(let error):
+                        isSending = false
                         if !Task.isCancelled {
                             errorMessage = error.localizedDescription
                         }
@@ -1010,6 +1074,47 @@ struct SmartSearchView: View {
             }
         }
         currentAITask = task
+    }
+
+    private func streamResponseWordByWord(_ fullText: String, capturedQuery: String?) {
+        let placeholder = ChatMessage(role: .assistant, text: "")
+        messages.append(placeholder)
+        let targetIndex = messages.count - 1
+
+        if let query = capturedQuery {
+            generateAITitle(for: query)
+        }
+
+        let words = fullText.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+
+        guard !words.isEmpty else {
+            messages[targetIndex].text = fullText
+            isSending = false
+            return
+        }
+
+        streamingTask?.cancel()
+        streamingTask = Task { @MainActor in
+            var accumulated = ""
+            for (i, word) in words.enumerated() {
+                guard !Task.isCancelled else {
+                    messages[targetIndex].text = fullText
+                    break
+                }
+                accumulated += (i == 0 ? "" : " ") + word
+                messages[targetIndex].text = accumulated
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            }
+            messages[targetIndex].text = fullText
+            isSending = false
+            streamingTask = nil
+        }
+    }
+
+    private func skipStreaming() {
+        streamingTask?.cancel()
+        streamingTask = nil
     }
 
     private static func extractURLs(from text: String) -> [URL] {
@@ -1338,7 +1443,7 @@ private struct SmartChatBubble: View {
                 withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
             }
         } else {
-            SmartMarkdownView(
+            RichMessageView(
                 rawText: message.text,
                 fontSize: fontSize,
                 linkColor: linkColor,
@@ -1419,120 +1524,6 @@ private struct SmartChatBubble: View {
             }
         }
         return attributed
-    }
-}
-
-// MARK: - Markdown renderer for assistant messages
-
-private struct SmartMarkdownView: View {
-    let rawText: String
-    let fontSize: CGFloat
-    let linkColor: Color
-    var onLinkTapped: ((URL) -> Void)?
-
-    private let codeBackground = Color.white.opacity(0.08)
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .paragraph(let s):
-                    paragraphView(s)
-                case .codeBlock(let s):
-                    codeBlockView(s)
-                }
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .textSelection(.enabled)
-    }
-
-    private enum MsgBlock { case paragraph(String); case codeBlock(String) }
-
-    private var blocks: [MsgBlock] {
-        var result: [MsgBlock] = []
-        let delim = "```"
-        var remaining = rawText
-        while true {
-            if let range = remaining.range(of: delim) {
-                let before = String(remaining[..<range.lowerBound])
-                remaining = String(remaining[range.upperBound...])
-                for p in splitParagraphs(before) { result.append(.paragraph(p)) }
-                if let close = remaining.range(of: delim) {
-                    var code = String(remaining[..<close.lowerBound])
-                    remaining = String(remaining[close.upperBound...])
-                    if let nl = code.firstIndex(of: "\n") { code = String(code[code.index(after: nl)...]) }
-                    let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty { result.append(.codeBlock(trimmed)) }
-                } else {
-                    result.append(.codeBlock(remaining.trimmingCharacters(in: .whitespacesAndNewlines)))
-                    break
-                }
-            } else {
-                for p in splitParagraphs(remaining) { result.append(.paragraph(p)) }
-                break
-            }
-        }
-        return result
-    }
-
-    private func splitParagraphs(_ text: String) -> [String] {
-        text.components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    @ViewBuilder
-    private func paragraphView(_ s: String) -> some View {
-        Group {
-            if let attr = styledParagraph(s) { Text(attr) }
-            else { Text(s) }
-        }
-        .font(.system(size: fontSize))
-        .foregroundColor(Color.white.opacity(0.95))
-        .multilineTextAlignment(.leading)
-        .lineSpacing(5)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .environment(\.openURL, OpenURLAction { url in
-            onLinkTapped?(url)
-            return .handled
-        })
-    }
-
-    private func styledParagraph(_ s: String) -> AttributedString? {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
-        guard var attributed = try? AttributedString(markdown: s, options: options, baseURL: nil) else {
-            guard var fallback = try? AttributedString(markdown: s) else { return nil }
-            return styleLinks(fallback)
-        }
-        return styleLinks(attributed)
-    }
-
-    private func styleLinks(_ input: AttributedString) -> AttributedString {
-        var result = input
-        for run in result.runs {
-            if run.link != nil {
-                result[run.range].foregroundColor = linkColor
-                result[run.range].underlineStyle = .single
-            }
-        }
-        return result
-    }
-
-    private func codeBlockView(_ code: String) -> some View {
-        Text(code)
-            .font(.system(size: fontSize - 1, design: .monospaced))
-            .foregroundColor(Color.white.opacity(0.9))
-            .textSelection(.enabled)
-            .multilineTextAlignment(.leading)
-            .lineSpacing(2)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(codeBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 

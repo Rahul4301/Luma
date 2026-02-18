@@ -6,6 +6,14 @@ options:
   xcodeVersion: "26.2"
   defaultConfig: Release
 
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.4.1"
+  LaTeXSwiftUI:
+    url: https://github.com/colinc86/LaTeXSwiftUI
+    from: "1.5.0"
+
 configFiles:
   Debug: Signing.xcconfig
   Release: Signing.xcconfig
@@ -67,6 +75,9 @@ targets:
           SWIFT_OPTIMIZATION_LEVEL: "-Onone"
         Release:
           SWIFT_COMPILATION_MODE: wholemodule
+    dependencies:
+      - package: MarkdownUI
+      - package: LaTeXSwiftUI
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig

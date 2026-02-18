@@ -27,7 +27,7 @@ struct LLMResponse: Codable {
 struct ChatMessage: Identifiable, Codable {
     let id: UUID
     let role: Role
-    let text: String
+    var text: String
     let timestamp: Date
     let pageURL: String?
     let pageTitle: String?

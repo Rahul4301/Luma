@@ -724,10 +724,9 @@ struct CommandSurfaceView: View {
             if isUser {
                 singleBlockMessageView
             } else {
-                MarkdownFormattedMessageView(
+                RichMessageView(
                     rawText: message.text,
                     fontSize: fontSize,
-                    textColor: assistantTextColor,
                     linkColor: linkColor,
                     onLinkTapped: onLinkTapped
                 )
@@ -755,134 +754,6 @@ struct CommandSurfaceView: View {
             })
             .accessibilityElement(children: .combine)
             .accessibilityLabel("You: \(message.text)")
-        }
-    }
-
-    /// Renders assistant message as formatted blocks: paragraphs with spacing, code blocks with monospace background.
-    private struct MarkdownFormattedMessageView: View {
-        let rawText: String
-        let fontSize: CGFloat
-        let textColor: Color
-        let linkColor: Color
-        let onLinkTapped: (URL) -> Void
-
-        private let codeBackground = Color.white.opacity(0.08)
-        private let codeCornerRadius: CGFloat = 8
-        private let blockSpacing: CGFloat = 10
-        private let paragraphLineSpacing: CGFloat = 5
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: blockSpacing) {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                    switch block {
-                    case .paragraph(let s):
-                        paragraphView(s)
-                    case .codeBlock(let s):
-                        codeBlockView(s)
-                    }
-                }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(rawText)
-        }
-
-        private var blocks: [MessageBlock] {
-            var result: [MessageBlock] = []
-            let codeDelimiter = "```"
-            var remaining = rawText
-            while true {
-                if let range = remaining.range(of: codeDelimiter) {
-                    let before = String(remaining[..<range.lowerBound])
-                    remaining = String(remaining[range.upperBound...])
-                    for paragraph in splitParagraphs(before) {
-                        if !paragraph.isEmpty { result.append(.paragraph(paragraph)) }
-                    }
-                    if let close = remaining.range(of: codeDelimiter) {
-                        let code = String(remaining[..<close.lowerBound])
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        remaining = String(remaining[close.upperBound...])
-                        if !code.isEmpty { result.append(.codeBlock(code)) }
-                    } else {
-                        result.append(.codeBlock(remaining.trimmingCharacters(in: .whitespacesAndNewlines)))
-                        break
-                    }
-                } else {
-                    for paragraph in splitParagraphs(remaining) {
-                        if !paragraph.isEmpty { result.append(.paragraph(paragraph)) }
-                    }
-                    break
-                }
-            }
-            return result
-        }
-
-        private func splitParagraphs(_ text: String) -> [String] {
-            text.components(separatedBy: "\n\n")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        }
-
-        @ViewBuilder
-        private func paragraphView(_ s: String) -> some View {
-            Group {
-                if let attributed = attributedParagraph(s) {
-                    Text(attributed)
-                } else {
-                    Text(s)
-                }
-            }
-            .font(.system(size: fontSize))
-            .foregroundColor(textColor)
-            .multilineTextAlignment(.leading)
-            .lineSpacing(paragraphLineSpacing)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .environment(\.openURL, OpenURLAction { url in
-                onLinkTapped(url)
-                return .handled
-            })
-        }
-
-        private func attributedParagraph(_ s: String) -> AttributedString? {
-            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
-            guard var attributed = try? AttributedString(markdown: s, options: options, baseURL: nil) else {
-                return (try? AttributedString(markdown: s)).flatMap { styleLinks($0) }
-            }
-            return styleLinks(attributed)
-        }
-
-        private func styleLinks(_ attributed: AttributedString) -> AttributedString {
-            var result = attributed
-            for run in result.runs {
-                if run.link != nil {
-                    let range = run.range
-                    result[range].foregroundColor = linkColor
-                    result[range].underlineStyle = .single
-                }
-            }
-            return result
-        }
-
-        private func codeBlockView(_ code: String) -> some View {
-            Text(code)
-                .font(.system(size: fontSize - 1, design: .monospaced))
-                .foregroundColor(Color.white.opacity(0.9))
-                .textSelection(.enabled)
-                .multilineTextAlignment(.leading)
-                .lineSpacing(2)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .background(codeBackground)
-                .clipShape(RoundedRectangle(cornerRadius: codeCornerRadius, style: .continuous))
-        }
-
-        private enum MessageBlock {
-            case paragraph(String)
-            case codeBlock(String)
         }
     }
 
