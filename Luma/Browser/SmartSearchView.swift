@@ -8,8 +8,6 @@ import PDFKit
 
 private enum SearchViewState: Equatable {
     case idle
-    case classifying
-    case ambiguous
     case aiChat
     case searching
 }
@@ -50,9 +48,9 @@ struct SmartSearchView: View {
     @State private var errorMessage: String? = nil
     @FocusState private var isInputFocused: Bool
 
-    @State private var pulseOpacity: Double = 0.3
-    @State private var ambiguousPillsVisible: Bool = false
     @State private var hasGeneratedTitle: Bool = false
+    @State private var searchBarOffset: CGFloat = 0
+    @State private var previousInputLength: Int = 0
 
     // Thinking steps
     @State private var thinkingSteps: [SmartThinkingStep] = []
@@ -81,17 +79,13 @@ struct SmartSearchView: View {
     private var aiProvider: AIProvider { AIProvider(rawValue: aiProviderRaw) ?? .gemini }
     private var fontSize: CGFloat { CGFloat(fontSizeRaw) }
 
-    private let classifier = QueryClassifier()
-
     var body: some View {
         ZStack {
             background
 
             switch viewState {
-            case .idle, .classifying:
+            case .idle:
                 centeredBarLayout
-            case .ambiguous:
-                ambiguousLayout
             case .aiChat:
                 chatLayout
             case .searching:
@@ -117,6 +111,9 @@ struct SmartSearchView: View {
                     if !includedOtherTabIds.contains(id) {
                         includedOtherTabIds.append(id)
                         loadTabContext(for: id)
+                    }
+                    if viewState == .idle {
+                        enterChatWithContext()
                     }
                 }
             )
@@ -161,12 +158,36 @@ struct SmartSearchView: View {
         .ignoresSafeArea()
     }
 
-    // MARK: - Centered bar (idle + classifying)
+    // MARK: - Centered bar (idle)
 
     private var centeredBarLayout: some View {
         GeometryReader { geo in
             let topOffset = geo.size.height * 0.38
             VStack(spacing: 0) {
+                // Context chips above the bar
+                if !includedOtherTabIds.isEmpty || !attachedDocuments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(includedOtherTabIds, id: \.self) { otherId in
+                                SmartContextChip(
+                                    label: otherTabLabel(tabId: otherId),
+                                    icon: "square.stack.3d.up",
+                                    onRemove: { removeIncludedOtherTab(id: otherId) }
+                                )
+                            }
+                            ForEach(attachedDocuments) { doc in
+                                SmartContextChip(
+                                    label: doc.displayName,
+                                    icon: doc.displayName.lowercased().hasSuffix(".pdf") ? "doc.fill" : "doc.text.fill",
+                                    onRemove: { removeAttachedDocument(id: doc.id) }
+                                )
+                            }
+                        }
+                    }
+                    .frame(maxWidth: SmartTokens.barMaxWidth)
+                    .padding(.bottom, 8)
+                }
+
                 searchBar(centered: true)
                     .frame(maxWidth: SmartTokens.barMaxWidth)
                 suggestionsDropdown
@@ -174,73 +195,10 @@ struct SmartSearchView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 32)
-            .padding(.top, topOffset)
+            .padding(.top, topOffset + searchBarOffset)
             .frame(maxWidth: .infinity)
         }
         .transition(.opacity)
-    }
-
-    // MARK: - Ambiguous layout
-
-    private var ambiguousLayout: some View {
-        GeometryReader { geo in
-            let topOffset = geo.size.height * 0.38
-            VStack(spacing: 0) {
-                searchBar(centered: true)
-                    .frame(maxWidth: SmartTokens.barMaxWidth)
-                    .padding(.bottom, 16)
-                ambiguousPills
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 32)
-            .padding(.top, topOffset)
-            .frame(maxWidth: .infinity)
-        }
-        .transition(.opacity)
-    }
-
-    private var ambiguousPills: some View {
-        HStack(spacing: 12) {
-            pillButton(label: "Search Google", icon: "magnifyingglass") {
-                performSearch(inputText)
-            }
-            .opacity(ambiguousPillsVisible ? 1 : 0)
-            .offset(y: ambiguousPillsVisible ? 0 : 12)
-
-            pillButton(label: "Ask AI", icon: "sparkles") {
-                transitionToChat()
-            }
-            .opacity(ambiguousPillsVisible ? 1 : 0)
-            .offset(y: ambiguousPillsVisible ? 0 : 12)
-            .animation(.easeOut(duration: 0.3).delay(0.08), value: ambiguousPillsVisible)
-        }
-        .animation(.easeOut(duration: 0.3), value: ambiguousPillsVisible)
-        .onAppear {
-            withAnimation { ambiguousPillsVisible = true }
-        }
-    }
-
-    private func pillButton(label: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 12, weight: .medium))
-                Text(label)
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .foregroundColor(SmartTokens.textPrimary)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.1))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - AI Chat layout
@@ -494,7 +452,14 @@ struct SmartSearchView: View {
                     placeholder: "Follow up\u{2026}",
                     fontSize: fontSize,
                     isFocused: $isInputFocused,
-                    onSubmit: sendChatMessage
+                    onSubmit: sendChatMessage,
+                    onLargePaste: { pastedText in
+                        let filename = "\(UUID().uuidString.prefix(8)).txt"
+                        attachedDocuments.append(SmartAttachedDocument(
+                            displayName: filename,
+                            extractedText: pastedText
+                        ))
+                    }
                 )
                 .frame(maxWidth: .infinity)
 
@@ -547,12 +512,25 @@ struct SmartSearchView: View {
 
     private func searchBar(centered: Bool) -> some View {
         let isGlowActive = isInputFocused || !inputText.isEmpty
-        let showPulse = viewState == .classifying
 
-        return HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(SmartTokens.textTertiary)
+        return HStack(spacing: 0) {
+            Menu {
+                Button(action: { addTabsSheetPresented = true }) {
+                    Label("Tabs", systemImage: "square.stack.3d.up")
+                }
+                Button(action: { documentPickerPresented = true }) {
+                    Label("Files", systemImage: "doc.fill")
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(SmartTokens.textSecondary)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
 
             TextField("Search or ask anything\u{2026}", text: $inputText)
                 .textFieldStyle(.plain)
@@ -563,22 +541,23 @@ struct SmartSearchView: View {
                 .onChange(of: inputText) { _, newValue in
                     selectedSuggestionIndex = -1
                     fetchSuggestions(for: newValue)
+                    handlePasteDetection(newValue)
                 }
 
-            if showPulse {
-                Circle()
-                    .fill(SmartTokens.accent)
-                    .frame(width: 8, height: 8)
-                    .opacity(pulseOpacity)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                            pulseOpacity = 0.9
-                        }
-                    }
+            Button(action: { submitWithSelection() }) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                     ? Color.white.opacity(0.2)
+                                     : Color.white.opacity(0.9))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: SmartTokens.cornerRadius, style: .continuous)
                 .fill(Color.white.opacity(0.08))
@@ -734,6 +713,28 @@ struct SmartSearchView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
+    private func handlePasteDetection(_ newValue: String) {
+        let delta = newValue.count - previousInputLength
+        previousInputLength = newValue.count
+
+        // Large jump in length (>300 chars in a single frame) = likely a paste
+        if delta > 300 {
+            let pastedText = newValue
+            inputText = ""
+            previousInputLength = 0
+
+            let filename = "\(UUID().uuidString.prefix(8)).txt"
+            attachedDocuments.append(SmartAttachedDocument(
+                displayName: filename,
+                extractedText: pastedText
+            ))
+
+            if viewState == .idle {
+                enterChatWithContext()
+            }
+        }
+    }
+
     private func clearSuggestions() {
         searchSuggestions = []
         selectedSuggestionIndex = -1
@@ -773,39 +774,22 @@ struct SmartSearchView: View {
     private func handleSubmit() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard viewState == .idle || viewState == .ambiguous else { return }
+        guard viewState == .idle else { return }
 
         if let url = resolveAsURL(trimmed) {
             onNavigate(url)
             return
         }
 
-        withAnimation(.easeOut(duration: 0.2)) { viewState = .classifying }
+        // If context is attached, always go to AI chat
+        let hasContext = !attachedDocuments.isEmpty || !includedOtherTabIds.isEmpty
+        let intent = hasContext ? .ai : QueryClassifier.classify(trimmed)
 
-        Task {
-            let intent: QueryIntent
-            if aiProvider == .ollama {
-                intent = await classifier.classify(
-                    query: trimmed, using: ollama,
-                    baseURL: ollamaBaseURL, model: ollamaModel
-                )
-            } else {
-                intent = QueryClassifier.heuristic(trimmed)
-            }
-
-            await MainActor.run {
-                switch intent {
-                case .search:
-                    performSearch(trimmed)
-                case .ai:
-                    transitionToChat()
-                case .ambiguous:
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        ambiguousPillsVisible = false
-                        viewState = .ambiguous
-                    }
-                }
-            }
+        switch intent {
+        case .search:
+            performSearch(trimmed)
+        case .ai:
+            transitionToChat()
         }
     }
 
@@ -904,8 +888,15 @@ struct SmartSearchView: View {
             tabManager.updateTitle(tab: id, title: heuristicTitle(firstMessage))
         }
 
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
-            viewState = .aiChat
+        // Slide the search bar down before switching to chat layout
+        withAnimation(.easeIn(duration: 0.18)) {
+            searchBarOffset = 80
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            searchBarOffset = 0
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                viewState = .aiChat
+            }
         }
 
         sendAIRequest(prompt: firstMessage, isFirstMessage: true)
@@ -1235,6 +1226,23 @@ struct SmartSearchView: View {
             fileURL: url
         ))
         documentError = nil
+
+        // Auto-enter AI chat when a file is added from the start page
+        if viewState == .idle {
+            enterChatWithContext()
+        }
+    }
+
+    private func enterChatWithContext() {
+        if let id = tabId {
+            let aiURL = URL(string: "luma://ai/\(id.uuidString)")!
+            tabManager.navigate(tab: id, to: aiURL)
+            tabManager.updateTitle(tab: id, title: "New Chat")
+        }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            viewState = .aiChat
+        }
+        isInputFocused = true
     }
 
     private func removeAttachedDocument(id: UUID) {
@@ -1266,14 +1274,14 @@ private struct SmartThinkingStep: Identifiable {
 }
 
 private struct PulseAnimation: ViewModifier {
-    @State private var opacity: Double = 0.4
+    @State private var scale: CGFloat = 0.85
 
     func body(content: Content) -> some View {
         content
-            .opacity(opacity)
+            .scaleEffect(scale)
             .onAppear {
                 withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
-                    opacity = 1.0
+                    scale = 1.15
                 }
             }
     }
@@ -1575,6 +1583,7 @@ private struct SmartGrowingInput: View {
     var fontSize: CGFloat
     @FocusState.Binding var isFocused: Bool
     var onSubmit: () -> Void
+    var onLargePaste: ((String) -> Void)?
 
     @State private var textHeight: CGFloat = 36
 
@@ -1587,7 +1596,8 @@ private struct SmartGrowingInput: View {
                 fontSize: fontSize,
                 dynamicHeight: $textHeight,
                 minHeight: 36,
-                onSubmit: onSubmit
+                onSubmit: onSubmit,
+                onLargePaste: onLargePaste
             )
             .focused($isFocused)
 
@@ -1611,6 +1621,7 @@ private struct SmartMultilineField: NSViewRepresentable {
     @Binding var dynamicHeight: CGFloat
     var minHeight: CGFloat
     var onSubmit: () -> Void
+    var onLargePaste: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -1624,6 +1635,7 @@ private struct SmartMultilineField: NSViewRepresentable {
         let tv = SmartSubmitTextView()
         tv.delegate = context.coordinator
         tv.onSubmit = onSubmit
+        tv.onLargePaste = onLargePaste
         tv.isRichText = false
         tv.drawsBackground = false
         tv.font = .systemFont(ofSize: fontSize)
@@ -1656,6 +1668,7 @@ private struct SmartMultilineField: NSViewRepresentable {
         let textChanged = tv.string != text
         if textChanged { tv.string = text }
         tv.onSubmit = onSubmit
+        tv.onLargePaste = onLargePaste
         tv.font = .systemFont(ofSize: fontSize)
         if let container = tv.textContainer {
             let w = scrollView.contentSize.width
@@ -1691,6 +1704,7 @@ private struct SmartMultilineField: NSViewRepresentable {
 
 private class SmartSubmitTextView: NSTextView {
     var onSubmit: (() -> Void)?
+    var onLargePaste: ((String) -> Void)?
 
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
@@ -1700,6 +1714,15 @@ private class SmartSubmitTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func paste(_ sender: Any?) {
+        if let clipboard = NSPasteboard.general.string(forType: .string),
+           clipboard.count > 300 {
+            onLargePaste?(clipboard)
+            return
+        }
+        super.paste(sender)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
