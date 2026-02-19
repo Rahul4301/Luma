@@ -80,102 +80,78 @@ struct BrowserShellView: View {
     private var chromeTextMuted: Color { chromeTextIsLight ? Color.white.opacity(0.7) : Color(white: 0.15).opacity(0.7) }
 
     var body: some View {
-        // Compute tab strip visibility once
-        let currentURL = tabManager.currentTab.flatMap { tabManager.tabURL[$0] ?? nil }
-        let isStartPage = (currentURL == nil || currentURL?.absoluteString == "about:blank")
-        let shouldShowTabStrip = tabManager.tabCount() > 1 || !isStartPage
+        // Safari layout: toolbar always when we have tabs; tab bar when tabCount >= 1
+        let shouldShowTabStrip = tabManager.tabCount() >= 1
+        let totalChromeHeight = addressBarHeight + (shouldShowTabStrip ? tabStripHeight : 0)
         
         return ZStack {
             Color(nsColor: .windowBackgroundColor)
                 .ignoresSafeArea()
 
-            // Configures the window titlebar to be tall enough to hold tabs.
-            // This is the key: it sets window.titlebarHeight so the traffic-light
-            // row is as tall as our tab strip (or default height when tabs hidden).
-            TitlebarConfigurator(tabStripHeight: shouldShowTabStrip ? tabStripHeight : 0, isFullScreen: $isFullScreen)
+            TitlebarConfigurator(tabStripHeight: totalChromeHeight, isFullScreen: $isFullScreen)
 
             GeometryReader { geometry in
                 HStack(spacing: 0) {
                     // Left: main browser content
                     VStack(spacing: 0) {
 
-                    // ─── Tab strip (toolbar stays dark; active tab uses chromeColor) ───
-                    // Hide tab strip on start page when there's only one tab
-                    if shouldShowTabStrip {
-                        TabStripView(
-                            tabManager: tabManager,
-                            faviconURLByTab: web.faviconURLByTab,
-                            contentAreaColor: chromeColor,
-                            chromeTextIsLight: chromeTextIsLight,
-                            onSwitch: { switchToTab($0) },
-                            onClose: { closeTab($0) },
-                            onNewTab: newTab,
-                            onDropURLForNewTab: { newTabWithURL($0) },
-                            onReorder: { tabManager.moveTab(from: $0, to: $1) }
-                        )
-                        .frame(height: tabStripHeight)
-                        .padding(.leading, isFullScreen ? 8 : 78)
-                        .padding(.trailing, 8)
-                        .padding(.top, isFullScreen ? 0 : -(tabStripHeight - 6))
-                        .background(Color(white: 0.12))
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .animation(.easeInOut(duration: 0.2), value: isFullScreen)
-                    }
-
-                    // ─── Address bar row (hidden on start page and AI chat; single centered bar is the search there) ───
-                    if let cid = tabManager.currentTab,
-                       let u = tabManager.tabURL[cid] ?? nil,
-                       u.absoluteString != "about:blank",
-                       !(u.scheme == "luma" && u.host == "ai") {
+                    // ─── Safari: Toolbar row first (always visible when we have a tab) ───
+                    if tabManager.currentTab != nil {
                         HStack(spacing: 6) {
-                            // Nav buttons (greyed out when nothing to go back/forward to)
+                            // Tab overview (Safari icon)
+                            Button(action: {}) {
+                                Image(systemName: "square.stack.3d.up")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(SafariChrome.textMuted)
+                                    .frame(width: 26, height: 26)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Show all tabs")
+
+                            // Back / Forward (grouped)
                             HStack(spacing: 2) {
                                 Button(action: { if let id = tabManager.currentTab { web.goBack(in: id) } }) {
                                     Image(systemName: "chevron.left")
                                         .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(web.canGoBackForActiveTab ? chromeText : chromeText.opacity(0.35))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill((web.canGoBackForActiveTab ? chromeText : chromeText.opacity(0.35)).opacity(0.15)))
+                                        .foregroundColor(web.canGoBackForActiveTab ? SafariChrome.textPrimary : SafariChrome.textMuted.opacity(0.6))
+                                        .frame(width: 26, height: 26)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(!web.canGoBackForActiveTab)
                                 .accessibilityLabel("Back")
-
                                 Button(action: { if let id = tabManager.currentTab { web.goForward(in: id) } }) {
                                     Image(systemName: "chevron.right")
                                         .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(web.canGoForwardForActiveTab ? chromeText : chromeText.opacity(0.35))
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill((web.canGoForwardForActiveTab ? chromeText : chromeText.opacity(0.35)).opacity(0.15)))
+                                        .foregroundColor(web.canGoForwardForActiveTab ? SafariChrome.textPrimary : SafariChrome.textMuted.opacity(0.6))
+                                        .frame(width: 26, height: 26)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(!web.canGoForwardForActiveTab)
                                 .accessibilityLabel("Forward")
-
                                 Button(action: { if let id = tabManager.currentTab { web.reload(in: id) } }) {
                                     Image(systemName: "arrow.clockwise")
                                         .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(chromeText)
-                                        .frame(width: 28, height: 28)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(chromeText.opacity(0.15)))
+                                        .foregroundColor(SafariChrome.textMuted)
+                                        .frame(width: 26, height: 26)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Reload")
                             }
 
-                            // Omnibox (unified look: subtle overlay on chrome)
+                            // Omnibox (Safari: magnifying glass left, blue focus ring)
                             HStack(spacing: 8) {
-                                Image(systemName: "globe")
+                                Image(systemName: "magnifyingglass")
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(chromeTextMuted)
-
+                                    .foregroundStyle(SafariChrome.textMuted)
                                 TextField("Search or enter website name", text: $addressBarText)
                                     .textFieldStyle(.plain)
-                                    .foregroundColor(chromeText)
+                                    .foregroundColor(SafariChrome.textPrimary)
                                     .focused($addressBarFocused)
-                                    .onSubmit {
-                                        applyAddressBarSubmit()
-                                    }
+                                    .onSubmit { applyAddressBarSubmit() }
                                     .onChange(of: addressBarText) { _, newValue in
                                         fetchHistorySuggestions(for: newValue)
                                         fetchSearchSuggestions(for: newValue)
@@ -187,24 +163,15 @@ struct BrowserShellView: View {
                                             addressBarKeyState.visible = false
                                         }
                                     }
-                                    .onTapGesture {
-                                        selectAllAddressBarText()
-                                    }
-
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(chromeTextMuted)
+                                    .onTapGesture { selectAllAddressBarText() }
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(chromeText.opacity(0.12))
-                            )
+                            .background(RoundedRectangle(cornerRadius: 10).fill(SafariChrome.addressBarBackground))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10)
-                                    .stroke(addressBarFocused ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 2)
+                                    .stroke(addressBarFocused ? SafariChrome.addressBarFocusRing : Color.clear, lineWidth: 2)
                             )
                             .animation(.easeInOut(duration: 0.1), value: addressBarFocused)
                             .onDrop(of: [.url, .fileURL, .plainText], isTargeted: nil) { providers in
@@ -214,57 +181,64 @@ struct BrowserShellView: View {
                                 }
                             }
 
-                            // Chat pill
+                            // Share (Safari)
+                            Button(action: {}) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(SafariChrome.textMuted)
+                                    .frame(width: 26, height: 26)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Share")
+                            // New tab
+                            Button(action: newTab) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(SafariChrome.textMuted)
+                                    .frame(width: 26, height: 26)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("New tab")
+                            // Sidebar (Safari)
                             Button(action: toggleAIPanel) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "bubble.left.and.bubble.right")
-                                        .font(.system(size: 10, weight: .medium))
-                                    Text("Chat")
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                                .foregroundColor(chromeText)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .fill(chromeText.opacity(0.15))
-                                )
+                                Image(systemName: "rectangle.leadinghalf.inset.filled")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(SafariChrome.textMuted)
+                                    .frame(width: 26, height: 26)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Toggle AI panel")
-
-                            // Downloads hub (heartbeat on new download + count badge)
-                            Button(action: { showDownloadsHub = true }) {
-                                ZStack(alignment: .topTrailing) {
-                                    Image(systemName: "arrow.down.circle")
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundColor(chromeText.opacity(0.9))
-                                        .frame(width: 28, height: 28)
-                                        .contentShape(Rectangle())
-                                        .scaleEffect(downloadIconScale)
-                                    if !downloadManager.recentDownloads.isEmpty {
-                                        Text(downloadManager.recentDownloads.count > 99 ? "99+" : "\(downloadManager.recentDownloads.count)")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(.white)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 2)
-                                            .background(Capsule().fill(Color.accentColor))
-                                            .offset(x: 6, y: -6)
-                                    }
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Downloads")
-                            .onChange(of: downloadManager.recentDownloads.count) { oldCount, newCount in
-                                if newCount > oldCount { runDownloadsHeartbeat() }
-                            }
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
                         .frame(height: addressBarHeight)
                         .frame(maxWidth: .infinity)
-                        .background(chromeColor)
-                        .animation(.easeInOut(duration: 0.06), value: chromeColor)
+                        .background(SafariChrome.toolbarBackground)
+                        .padding(.leading, isFullScreen ? 0 : 70)
+                        .padding(.top, isFullScreen ? 0 : -8)
+                    }
+
+                    // ─── Safari: Tab bar below toolbar ───
+                    if shouldShowTabStrip {
+                        SafariTabStripView(
+                            tabManager: tabManager,
+                            faviconURLByTab: web.faviconURLByTab,
+                            activeTabColor: chromeColor,
+                            chromeTextIsLight: chromeTextIsLight,
+                            onSwitch: { switchToTab($0) },
+                            onClose: { closeTab($0) },
+                            onNewTab: newTab,
+                            onDropURLForNewTab: { newTabWithURL($0) },
+                            onReorder: { tabManager.moveTab(from: $0, to: $1) }
+                        )
+                        .frame(height: tabStripHeight)
+                        .padding(.leading, 8)
+                        .padding(.trailing, 8)
+                        .background(SafariChrome.tabBarBackground)
+                        .transition(.opacity)
                     }
 
                     // ─── Web content or start page ───────────────────────────
@@ -364,10 +338,9 @@ struct BrowserShellView: View {
                 .animation(.easeInOut(duration: 0.06), value: shouldShowTabStrip)
                 .animation(.easeInOut(duration: 0.06), value: tabManager.tabCount())
                 .overlay(alignment: .topLeading) {
-                    // Address bar suggestions: history (URL/title) first, then search; show when any suggestion exists
                     let hasSuggestions = !historySuggestions.isEmpty || !searchSuggestions.isEmpty
-                    if tabManager.currentTab.flatMap({ tabManager.tabURL[$0] ?? nil }) != nil,
-                       (tabManager.currentTab.flatMap { tabManager.tabURL[$0] ?? nil }?.absoluteString ?? "") != "about:blank",
+                    let chromeTop = addressBarHeight + (tabManager.tabCount() >= 1 ? tabStripHeight : 0)
+                    if tabManager.currentTab != nil,
                        addressBarFocused,
                        !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty,
                        hasSuggestions {
@@ -392,7 +365,7 @@ struct BrowserShellView: View {
                         .background(Color(nsColor: .windowBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .shadow(color: .black.opacity(0.15), radius: 8)
-                        .padding(.top, addressBarHeight + chromePadding + 6)
+                        .padding(.top, chromeTop + chromePadding + 6)
                         .padding(.leading, chromePadding + 6 + 84 + 8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .onAppear {
