@@ -9,16 +9,11 @@ import AppKit
 /// Exposes page theme (background color) for chrome unification.
 /// Handles file downloads via WKDownloadDelegate; saves to ~/Downloads and notifies DownloadManager.
 ///
-/// Passwords & login: Uses persistent WKWebsiteDataStore.default() and a shared process pool
-/// so cookies, localStorage, and site data (including credentials the system may use for
-/// autofill) are saved and shared across tabs. Autofill of saved credentials works when
-/// sites use standard autocomplete attributes. The system "Save Password" prompt is a
-/// WebKit limitation in embedded WKWebView and may not appear; credentials saved in
-/// Safari or elsewhere can still be used here when the system offers them.
+/// Passwords & login: Uses persistent WKWebsiteDataStore.default() so cookies, localStorage,
+/// and site data (including credentials the system may use for autofill) are saved and shared
+/// across tabs. On macOS 12+ WebKit uses a single process pool per app; no need to set one.
+/// Autofill of saved credentials works when sites use standard autocomplete attributes.
 final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
-    /// Shared process pool so all tabs share the same credential/cookie store.
-    private static let sharedProcessPool = WKProcessPool()
-
     private var webViews: [UUID: WKWebView] = [:]
     private(set) var activeTab: UUID?
     @Published var currentURL: URL?
@@ -204,15 +199,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func ensureWebView(for tabId: UUID) -> WKWebView {
         if let wv = webViews[tabId] { return wv }
         let config = WKWebViewConfiguration()
-        config.processPool = WebViewWrapper.sharedProcessPool
         config.websiteDataStore = .default()
-        // Explicitly enable JavaScript and normal storage so Google sign-in / API key flows work (cookies, localStorage).
-        config.preferences.javaScriptEnabled = true
+        // Enable JavaScript via per-navigation preferences (preferences.javaScriptEnabled is deprecated).
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
         // Enable Web Inspector + "Inspect Element" in context menu (macOS WebKit Developer Extras).
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        if #available(macOS 11.0, *) {
-            config.defaultWebpagePreferences.allowsContentJavaScript = true
-        }
         config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
         config.userContentController.add(googleSuspiciousErrorHandler, name: "lumaGoogleSuspiciousError")
         let themeEarlyScript = WKUserScript(source: WebViewWrapper.themeEarlyScriptSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
@@ -489,7 +480,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     /// Extracts visible text from the page, bounded to maxChars (default 4000, hard max 12000 per AGENTS.md).
     func evaluateVisibleText(maxChars: Int = 4000, completion: @escaping (String?) -> Void) {
-        guard let tabId = activeTab, let wv = webViews[tabId] else {
+        guard let tabId = activeTab, webViews[tabId] != nil else {
             DispatchQueue.main.async { completion(nil) }
             return
         }
@@ -788,18 +779,10 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let id = tabManager.newTab(url: requestURL)
         // IMPORTANT: the returned WKWebView must be created with the provided `configuration`,
         // otherwise WebKit throws: "Returned WKWebView was not created with the given configuration."
-        //
-        // CRITICAL FOR GOOGLE SIGN-IN: We must set the shared processPool and websiteDataStore
-        // on the provided configuration so cookies/sessions are shared across all tabs.
-        // Without this, Google OAuth popups create isolated sessions that don't persist.
-        configuration.processPool = WebViewWrapper.sharedProcessPool
+        // Use default data store so cookies/sessions are shared (Google OAuth popups persist).
         configuration.websiteDataStore = .default()
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        // Ensure JavaScript/content scripts are enabled for popup windows as well (Google/Gmail sign-in flows).
-        configuration.preferences.javaScriptEnabled = true
-        if #available(macOS 11.0, *) {
-            configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        }
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         let wv = WKWebView(frame: .zero, configuration: configuration)
         wv.customUserAgent = Self.userAgent(for: requestURL)
         wv.navigationDelegate = self

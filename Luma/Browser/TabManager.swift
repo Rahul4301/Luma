@@ -38,7 +38,7 @@ final class TabManager: ObservableObject {
         let id = UUID()
         tabOrder.append(id)
         // Start page uses about:blank so back/forward can return to it
-        tabURL[id] = url ?? URL(string: "about:blank")
+        tabURL[id] = url ?? URL(string: "about:blank")!
         currentTab = id
         return id
     }
