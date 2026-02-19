@@ -49,6 +49,7 @@ struct BrowserShellView: View {
     @State private var browserFindQuery: String = ""
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var downloadIconScale: CGFloat = 1
+    @State private var isFullScreen: Bool = false
 
     private let router = CommandRouter()
     private let gemini = GeminiClient(apiKeyProvider: { KeychainManager.shared.fetchGeminiKey() })
@@ -91,7 +92,7 @@ struct BrowserShellView: View {
             // Configures the window titlebar to be tall enough to hold tabs.
             // This is the key: it sets window.titlebarHeight so the traffic-light
             // row is as tall as our tab strip (or default height when tabs hidden).
-            TitlebarConfigurator(tabStripHeight: shouldShowTabStrip ? tabStripHeight : 0)
+            TitlebarConfigurator(tabStripHeight: shouldShowTabStrip ? tabStripHeight : 0, isFullScreen: $isFullScreen)
 
             GeometryReader { geometry in
                 HStack(spacing: 0) {
@@ -113,11 +114,12 @@ struct BrowserShellView: View {
                             onReorder: { tabManager.moveTab(from: $0, to: $1) }
                         )
                         .frame(height: tabStripHeight)
-                        .padding(.leading, 78)   // clear traffic lights
+                        .padding(.leading, isFullScreen ? 8 : 78)
                         .padding(.trailing, 8)
-                        .padding(.top, -(tabStripHeight - 6)) // pull up into titlebar
-                        .background(Color(white: 0.12))   // toolbar: dark strip (traffic lights + inactive area)
+                        .padding(.top, isFullScreen ? 0 : -(tabStripHeight - 6))
+                        .background(Color(white: 0.12))
                         .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(.easeInOut(duration: 0.2), value: isFullScreen)
                     }
 
                     // ─── Address bar row (hidden on start page and AI chat; single centered bar is the search there) ───
@@ -1722,6 +1724,9 @@ struct WindowDragRegionView: NSViewRepresentable {
 /// can match the titlebar to it exactly.
 struct TitlebarConfigurator: NSViewRepresentable {
     let tabStripHeight: CGFloat
+    @Binding var isFullScreen: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -1731,11 +1736,48 @@ struct TitlebarConfigurator: NSViewRepresentable {
             window.titleVisibility = .hidden
             window.styleMask.insert(.fullSizeContentView)
             window.isMovableByWindowBackground = false
+            window.tabbingMode = .disallowed
+
+            context.coordinator.isFullScreen = window.styleMask.contains(.fullScreen)
+
+            NotificationCenter.default.addObserver(
+                context.coordinator,
+                selector: #selector(Coordinator.didEnterFullScreen),
+                name: NSWindow.didEnterFullScreenNotification,
+                object: window
+            )
+            NotificationCenter.default.addObserver(
+                context.coordinator,
+                selector: #selector(Coordinator.didExitFullScreen),
+                name: NSWindow.didExitFullScreenNotification,
+                object: window
+            )
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+
+    class Coordinator: NSObject {
+        var parent: TitlebarConfigurator
+
+        var isFullScreen: Bool {
+            get { parent.isFullScreen }
+            set { parent.isFullScreen = newValue }
+        }
+
+        init(_ parent: TitlebarConfigurator) {
+            self.parent = parent
+        }
+
+        @objc func didEnterFullScreen(_ note: Notification) {
+            DispatchQueue.main.async { self.isFullScreen = true }
+        }
+
+        @objc func didExitFullScreen(_ note: Notification) {
+            DispatchQueue.main.async { self.isFullScreen = false }
+        }
+    }
 }
 
 #Preview {

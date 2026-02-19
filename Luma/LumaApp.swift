@@ -8,6 +8,10 @@ import SwiftUI
 
 @main
 struct LumaApp: App {
+    init() {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
