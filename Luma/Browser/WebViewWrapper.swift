@@ -60,18 +60,6 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return h
     }()
 
-    /// At documentStart: read theme-color meta only (instant, no layout). Many sites set it in <head>.
-    private static let themeEarlyScriptSource = """
-        (function(){
-            if (!window.webkit || !window.webkit.messageHandlers.lumaPageTheme) return;
-            var meta = document.querySelector('meta[name="theme-color"]');
-            if (!meta || !meta.content) return;
-            var c = (meta.content || '').trim();
-            if (c.indexOf('#') === 0 && c.length >= 7) { var r=parseInt(c.slice(1,3),16),g=parseInt(c.slice(3,5),16),b=parseInt(c.slice(5,7),16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); return; }
-            if (c.length === 4 && c[0]==='#') { var r=parseInt(c[1]+c[1],16),g=parseInt(c[2]+c[2],16),b=parseInt(c[3]+c[3],16); window.webkit.messageHandlers.lumaPageTheme.postMessage(r+','+g+','+b); }
-        })();
-        """
-
     /// Dia-style theme extraction at documentEnd: theme-color meta → CSS variables → body/root → header/main/first visible.
     /// Runs on all sites (including Gmail) so tab and address bar match site theme. MutationObserver + delayed samples for live updates.
     private static let themeScriptSource = """
@@ -131,9 +119,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         })();
         """
 
-    /// Chrome UA for general browsing -- most sites expect Chrome.
+    /// Real Chrome UA for general browsing. Custom or app-named UAs (e.g. LumaBrowser/1.0) are
+    /// flagged by bot detection. Use a standard Chrome string; do not modify navigator or other
+    /// fingerprint surfaces.
     private static let chromeLikeUserAgent =
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     /// Real Safari UA for Google sign-in. The default WKWebView UA omits the
     /// "Version/… Safari/…" token, causing Google to reject it as an embedded
@@ -141,15 +131,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private static let safariUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15"
 
-    /// Hosts that need the Safari UA instead of the Chrome spoof. Google OAuth
-    /// fingerprints the rendering engine and blocks sign-in when the UA claims
-    /// Chrome but the engine is WebKit. Using a real Safari UA fixes this.
+    /// Hosts that need the Safari UA instead of the Chrome UA. When the UA claims Chrome but the
+    /// engine is WebKit, strict CDNs (e.g. Akamai) and auth flows can block with "Access Denied".
+    /// Using the real Safari UA so UA and engine match avoids this.
     private static func shouldUseSafariUserAgent(for url: URL?) -> Bool {
         guard let host = url?.host?.lowercased() else { return false }
         if host.contains("accounts.google.com") { return true }
         if host.contains("accounts.youtube.com") { return true }
         if host.contains("myaccount.google.com") { return true }
         if host.hasSuffix(".google.com") && host.contains("signin") { return true }
+        if host == "airindia.com" || host.hasSuffix(".airindia.com") { return true }
         return false
     }
 
@@ -198,16 +189,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func ensureWebView(for tabId: UUID) -> WKWebView {
         if let wv = webViews[tabId] { return wv }
+        // Standards-compliant config to avoid bot/fingerprint detection: persistent store, real UA, full JS, no document-start injection.
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = .default()  // Persistent cookies/localStorage; never use .nonPersistent()
         // Enable JavaScript via per-navigation preferences (preferences.javaScriptEnabled is deprecated).
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         // Enable Web Inspector + "Inspect Element" in context menu (macOS WebKit Developer Extras).
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
         config.userContentController.add(googleSuspiciousErrorHandler, name: "lumaGoogleSuspiciousError")
-        let themeEarlyScript = WKUserScript(source: WebViewWrapper.themeEarlyScriptSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        config.userContentController.addUserScript(themeEarlyScript)
+        // Inject only at documentEnd (and didFinish fallback). No atDocumentStart — early injection is detectable as DOM tampering.
         let themeScript = WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(themeScript)
         let googleErrorScript = WKUserScript(source: WebViewWrapper.googleSuspiciousErrorScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)

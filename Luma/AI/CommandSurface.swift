@@ -106,10 +106,9 @@ struct CommandSurfaceView: View {
             RoundedRectangle(cornerRadius: PanelTokens.cornerRadiusLarge, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
+        // Load page context only when the sidebar is toggled open (not on every URL change).
+        // Auto-reloading on navigation can look like automated scraping to strict sites (e.g. Akamai).
         .onAppear {
-            loadPageContext()
-        }
-        .onReceive(webViewWrapper.$currentURL.removeDuplicates()) { _ in
             loadPageContext()
         }
         .sheet(isPresented: $addTabsSheetPresented) {
