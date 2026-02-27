@@ -131,19 +131,6 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private static let safariUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15"
 
-    /// Hosts that need the Safari UA instead of the Chrome UA. When the UA claims Chrome but the
-    /// engine is WebKit, strict CDNs (e.g. Akamai) and auth flows can block with "Access Denied".
-    /// Using the real Safari UA so UA and engine match avoids this.
-    private static func shouldUseSafariUserAgent(for url: URL?) -> Bool {
-        guard let host = url?.host?.lowercased() else { return false }
-        if host.contains("accounts.google.com") { return true }
-        if host.contains("accounts.youtube.com") { return true }
-        if host.contains("myaccount.google.com") { return true }
-        if host.hasSuffix(".google.com") && host.contains("signin") { return true }
-        if host == "airindia.com" || host.hasSuffix(".airindia.com") { return true }
-        return false
-    }
-
     /// Hosts where the bare default WKWebView UA should be used (no spoofing).
     private static func shouldUseDefaultUserAgent(for url: URL?) -> Bool {
         guard let host = url?.host?.lowercased() else { return false }
@@ -152,10 +139,10 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
 
     /// Returns the appropriate User-Agent string for a given URL.
+    /// Always uses Safari UA for consistency and to avoid bot detection on Akamai-protected sites.
     private static func userAgent(for url: URL?) -> String? {
-        if shouldUseSafariUserAgent(for: url) { return safariUserAgent }
         if shouldUseDefaultUserAgent(for: url) { return nil }
-        return chromeLikeUserAgent
+        return safariUserAgent
     }
 
     /// Detects "Failed to generate API key, The request is suspicious" on AI Studio so we can show an in-app explanation.
@@ -204,8 +191,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let googleErrorScript = WKUserScript(source: WebViewWrapper.googleSuspiciousErrorScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(googleErrorScript)
         let wv = WKWebView(frame: .zero, configuration: config)
-        // Default to Chrome-like UA, but allow host-based fallback to WebKit UA when needed.
-        wv.customUserAgent = WebViewWrapper.chromeLikeUserAgent
+        // Use Safari UA for all requests to avoid bot detection on Akamai-protected sites.
+        wv.customUserAgent = WebViewWrapper.safariUserAgent
         wv.navigationDelegate = self
         wv.uiDelegate = self
         webViews[tabId] = wv
@@ -548,6 +535,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
         if navigationAction.shouldPerformDownload {
+            print("WebViewWrapper: Navigation marked as download: \(navigationAction.request.url?.absoluteString ?? "nil")")
             decisionHandler(.download, preferences)
             return
         }
@@ -758,15 +746,37 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// performing the navigation (proper `Referer`, cookies, redirects, and window scripting). Many library
     /// resolvers (Primo/Alma) rely on this behavior.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // If targetFrame exists, the navigation is for an existing frame (e.g., iframe) - let it proceed.
         guard navigationAction.targetFrame == nil else { return nil }
-        guard let requestURL = navigationAction.request.url,
-              let scheme = requestURL.scheme?.lowercased(),
-              (scheme == "http" || scheme == "https" || scheme == "file") else {
+
+        let requestURL = navigationAction.request.url
+        
+        // Allow about:blank - Google Docs and other apps use window.open() with no URL initially,
+        // then navigate the popup via JavaScript. Blocking about:blank breaks these flows.
+        let isAboutBlank = requestURL?.absoluteString == "about:blank" || requestURL == nil
+        
+        if !isAboutBlank {
+            guard let url = requestURL,
+                  let scheme = url.scheme?.lowercased(),
+                  (scheme == "http" || scheme == "https" || scheme == "file") else {
+                print("WebViewWrapper: Blocked navigation to invalid URL: \(requestURL?.absoluteString ?? "nil")")
+                return nil
+            }
+        }
+
+        // If tabManager is unavailable, fall back to loading in current tab instead of blocking entirely.
+        guard let tabManager = tabManager else {
+            if let url = requestURL {
+                print("WebViewWrapper: tabManager is nil, loading \(url.absoluteString) in current tab")
+                webView.load(URLRequest(url: url))
+            }
             return nil
         }
-        guard let tabManager = tabManager else { return nil }
+
+        print("WebViewWrapper: Creating new tab for popup: \(requestURL?.absoluteString ?? "about:blank")")
 
         // Create a new tab and *return* its webview so WebKit performs the navigation with correct headers.
+        // For about:blank popups, pass nil so TabManager creates a blank tab that will be navigated later.
         let id = tabManager.newTab(url: requestURL)
         // IMPORTANT: the returned WKWebView must be created with the provided `configuration`,
         // otherwise WebKit throws: "Returned WKWebView was not created with the given configuration."
@@ -813,6 +823,53 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 completionHandler(nil)
             }
         }
+    }
+
+    // MARK: - JavaScript dialogs
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow!) { _ in
+            completionHandler()
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow!) { response in
+            completionHandler(response == .alertFirstButtonReturn)
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = prompt
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        textField.stringValue = defaultText ?? ""
+        alert.accessoryView = textField
+
+        alert.beginSheetModal(for: webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow!) { response in
+            completionHandler(response == .alertFirstButtonReturn ? textField.stringValue : nil)
+        }
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        // A popup window closed itself via window.close() - close the corresponding tab.
+        guard let tabId = webViews.first(where: { $0.value === webView })?.key else { return }
+        print("WebViewWrapper: Popup closed via window.close(), removing tab \(tabId)")
+        tabManager?.closeTab(tabId)
+        removeWebView(for: tabId)
     }
 }
 
